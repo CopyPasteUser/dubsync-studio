@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.mkv
+*.mp4
+*.wav
+.DS_Store
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm

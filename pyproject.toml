@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dubsync-studio"
+version = "1.5.14"
+description = "Local desktop application for aligning multilingual video audio tracks"
+readme = "README.md"
+license = { file = "LICENSE" }
+keywords = ["video", "audio", "synchronization", "multilingual", "ffmpeg", "matroska"]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Environment :: X11 Applications :: Qt",
+  "Intended Audience :: End Users/Desktop",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Multimedia :: Video",
+]
+requires-python = ">=3.10"
+dependencies = [
+  "PySide6>=6.7,<7",
+  "numpy>=1.26,<3",
+  "opencv-python-headless>=4.9,<5",
+]
+
+[project.scripts]
+dubsync-studio = "dubsync.cli:main"
+dubsync-studio-gui = "dubsync.gui.main_window:main"
+
+[project.optional-dependencies]
+test = ["tomli>=2.0; python_version < '3.11'", "pytest>=8.0,<9", "pytest-qt>=4.4,<5"]
+
+[tool.setuptools.packages.find]
+include = ["dubsync*"]
+
+[tool.setuptools.package-data]
+dubsync = ["assets/*.svg"]
