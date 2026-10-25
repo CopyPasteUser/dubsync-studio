@@ -8,6 +8,10 @@
 
 > **Vibe-coded project:** the workflow design, diagnostics, testing material, and quality decisions are mine; AI-assisted development was used to implement and refine parts of the project.
 
+## Screenshots
+
+Actual application screenshots will appear here when the current build is uploaded. Suggested views: project setup, episode matching, alignment review, batch progress, diagnostics, and the three performance profiles. This section intentionally contains no mockups presented as real UI.
+
 ## Project status
 
 This repository currently contains the project documentation. The working application source and packaged releases still need to be uploaded before the commands below can be used unchanged.
