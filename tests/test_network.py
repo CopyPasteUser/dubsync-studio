@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from dubsync.core.network import parse_mount_table, network_mount_for_path
+from dubsync.core.network import parse_mount_table, network_mount_for_path, is_network_path
 from dubsync.core.fingerprint import quick_fingerprint, fingerprint_many
 
 
@@ -27,6 +27,10 @@ class NetworkMountTests(unittest.TestCase):
         ]
         self.assertEqual(network_mount_for_path("/mnt/series/S01E01.mkv", mounts)["source"], "nested")
         self.assertIsNone(network_mount_for_path("/home/user/video.mkv", mounts))
+
+    def test_unc_paths_are_network_even_without_linux_mount_table(self):
+        self.assertTrue(is_network_path(r"\\server\share\episode.mkv"))
+        self.assertTrue(is_network_path("//server/share/episode.mkv"))
 
 
 class QuickFingerprintTests(unittest.TestCase):

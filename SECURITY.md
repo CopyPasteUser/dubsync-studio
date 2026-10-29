@@ -2,6 +2,22 @@
 
 DubSync Studio processes media locally and does not require an online account or upload media. The application invokes FFmpeg/FFprobe with argument arrays instead of interpolating media paths into a shell command.
 
+## Video sample cache
+
+The optional `video-samples.sqlite3` cache contains only perceptual video hashes
+and timestamps (no decoded video frames or audio). It is stored in the local
+XDG cache directory with owner-only permissions where supported and bounded
+by count and disk size. A fresh sample of eleven distributed byte windows and
+file metadata is checked before reuse, including a stability check across
+decoding. This identity check is intentionally cheaper than reading and hashing
+the complete media file; it is not a cryptographic guarantee against deliberate
+same-metadata manipulation of unsampled bytes. Disable **Bildfingerprints
+wiederverwenden** in performance settings if this threat is relevant.
+
+Cached frames never make an episode eligible for export: video correspondence,
+temporal coverage, identity checks and quality gates are recomputed per job.
+The older alignment-result cache remains disabled for batch decisions.
+
 ## Media files and projects
 
 - Source media is read-only from DubSync Studio's perspective; final exports are written to a separate output path.

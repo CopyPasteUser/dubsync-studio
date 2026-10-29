@@ -19,7 +19,7 @@ from typing import Callable, Any
 from PySide6.QtCore import Qt, QThread, Signal, QSettings, QSize, QTimer, QUrl, QPointF, QRectF
 from PySide6.QtGui import QAction, QColor, QFont, QIcon, QDesktopServices, QPainter, QPen, QBrush
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QApplication, QMainWindow, QWidget, QLayout, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QFileDialog, QListWidget, QListWidgetItem,
     QTableWidget, QTableWidgetItem, QAbstractItemView, QSplitter, QFrame,
     QScrollArea, QRadioButton, QCheckBox, QComboBox, QLineEdit,
@@ -28,19 +28,26 @@ from PySide6.QtWidgets import (
     QButtonGroup, QSizePolicy, QDialog, QDialogButtonBox, QSpinBox, QInputDialog, QMenu,
 )
 
+from dubsync.gui.theme import studio_stylesheet
+from dubsync.gui.workbench import StudioReviewPanel
+from dubsync.gui.queue_room import QueueControlRoom
+
 from dubsync.core.alignment import AlignmentError, align_videos
-from dubsync.core.batch import (batch_export_groups, output_path_for_group, choose_smallest_video, estimate_output_size_bytes)
+from dubsync.core.batch import (output_path_for_group, choose_smallest_video, estimate_output_size_bytes)
 from dubsync.core.cache import AlignmentCache
 from dubsync.core.session import persistent_preferences
 from dubsync.core.export import ExportError, export_multilingual
 from dubsync.core.fingerprint import fingerprint_many
-from dubsync.core.models import AlignmentResult, EpisodeGroup, MediaInfo, TrackChoice
+from dubsync.core.models import (AlignmentResult, EpisodeGroup, MediaInfo, TrackChoice,
+                                 TimelineSegment, validate_timeline_layout)
+from dubsync.gui.segment_editor import SegmentEditorDialog
 from dubsync.core.languages import (LANGUAGE_CHOICES, default_track_title, language_display_name, normalize_language_code, resolve_track_label)
 from dubsync.core.probe import MediaToolError, choose_default_audio, describe_media, probe_media, probe_many, require_media_tools
 from dubsync.core.network import network_mount_candidates, network_mount_for_path, network_mount_type_label, is_network_path
 from dubsync.core.scanner import infer_language, scan_directories
 from dubsync.core.project import ProjectFileError, load_project_file, save_project_file
 from dubsync.core.history import JobHistory
+from dubsync.core.job_queue import BatchJobQueue, QueueError
 from dubsync.core.logging_setup import configure_logging, default_log_path
 from dubsync.core.alignment_diagnostics import (
     latest_diagnostic, recent_diagnostics, diagnostics_directory, summarize_diagnostic,
@@ -52,12 +59,12 @@ from dubsync.core.drop import classify_dropped_paths
 from dubsync.core.performance import (
     default_performance_settings, normalize_performance_settings,
     apply_cpu_thread_limit, supported_hardware_modes, performance_diagnostics,
-    settings_for_preset, system_specs, PROFILE_LABELS,
+    settings_for_preset, system_specs, recommended_profile, auto_decoder_summary, PROFILE_LABELS,
 )
 
 
 APP_TITLE = "DubSync Studio"
-APP_VERSION = "1.5.14"
+APP_VERSION = "2.0.0b2"
 APP_ROOT = Path(__file__).resolve().parents[2]
 _PACKAGE_LOGO = Path(__file__).resolve().parents[1] / "assets" / "dubsync-studio.svg"
 APP_LOGO = _PACKAGE_LOGO if _PACKAGE_LOGO.is_file() else APP_ROOT / "assets" / "dubsync-studio.svg"
@@ -233,11 +240,12 @@ class PerformanceSettingsDialog(QDialog):
     def __init__(self, current: dict[str, Any], parent=None):
         super().__init__(parent)
         self.setWindowTitle("Feineinstellungen · Leistung & Analyse")
-        self.resize(620, 520)
+        self.resize(640, 560)
         layout = QVBoxLayout(self)
         layout.setSpacing(14)
         intro = QLabel(
-            "Passe Geschwindigkeit und Trefferqualität an. DubSync berechnet Synchronisationen "
+            "Leicht, Mittel und Stark passen CPU und Parallelität an deine Hardware an. "
+            "Die Analysegenauigkeit lässt sich unabhängig davon einstellen. DubSync berechnet Synchronisationen "
             "für neue Exporte frisch; frühere Analyseergebnisse werden nicht wiederverwendet."
         )
         intro.setWordWrap(True)
@@ -247,30 +255,43 @@ class PerformanceSettingsDialog(QDialog):
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         self.preset_combo = QComboBox()
-        self.preset_combo.addItem("Automatisch – passend zu diesem System", "system")
-        self.preset_combo.addItem("Leicht – wenig CPU, ideal neben Spielen", "fast")
-        self.preset_combo.addItem("Ausgewogen – empfohlen für Alltag", "balanced")
-        self.preset_combo.addItem("Stark – maximale Genauigkeit, hohe Last", "quality")
+        choice = PROFILE_LABELS[recommended_profile()]
+        self.preset_combo.addItem(f"Auto – empfiehlt {choice} für diese Hardware", "system")
+        self.preset_combo.addItem("Leicht – kleines CPU- und RAM-Budget", "fast")
+        self.preset_combo.addItem("Mittel – ausgewogene CPU-Auslastung", "balanced")
+        self.preset_combo.addItem("Stark – maximale sinnvolle Hardwareauslastung", "quality")
         self.preset_combo.addItem("Benutzerdefiniert", "custom")
         preset_index = self.preset_combo.findData(current.get("preset", "system"))
         self.preset_combo.setCurrentIndex(max(0, preset_index))
         form.addRow("Analyseprofil", self.preset_combo)
 
         self.cpu_threads = QSpinBox()
-        self.cpu_threads.setRange(1, max(1, os.cpu_count() or 2))
+        self.cpu_threads.setRange(1, system_specs()["logical_cpus"])
         self.cpu_threads.setSuffix(" Threads")
         self.cpu_threads.setToolTip("Begrenzt die von OpenCV verwendeten CPU-Threads.")
         self.cpu_threads.setValue(int(current.get("cpu_threads", 4)))
         form.addRow("CPU-Limit", self.cpu_threads)
 
         self.probe_workers = QSpinBox()
-        self.probe_workers.setRange(1, min(8, max(1, os.cpu_count() or 2)))
+        self.probe_workers.setRange(1, min(8, system_specs()["logical_cpus"]))
         self.probe_workers.setSuffix(" parallele Prüfungen")
         self.probe_workers.setValue(int(current.get("probe_workers", min(4, max(1, os.cpu_count() or 2)))))
         self.probe_workers.setToolTip(
             "Begrenzt gleichzeitige FFprobe-Prozesse. NAS-Freigaben werden zur Schonung automatisch auf höchstens zwei begrenzt."
         )
         form.addRow("Metadaten-Parallelität", self.probe_workers)
+
+        self.sampling_workers_combo = QComboBox()
+        self.sampling_workers_combo.addItem("1 Decoder – geringe Last, auch für NAS", 1)
+        self.sampling_workers_combo.addItem("2 Decoder – lokale Videos parallel", 2)
+        self.sampling_workers_combo.setCurrentIndex(
+            max(0, self.sampling_workers_combo.findData(int(current.get("sampling_workers", 1))))
+        )
+        self.sampling_workers_combo.setToolTip(
+            "Zwei Videodateien können gleichzeitig eingelesen werden, wenn CPU und RAM reichen. "
+            "Auf SMB/NFS und bei parallelen GPU-Autobenchmarks wird automatisch ein Decoder verwendet."
+        )
+        form.addRow("Video-Einlesen", self.sampling_workers_combo)
 
         self.max_samples = QSpinBox()
         self.max_samples.setRange(200, 4000)
@@ -313,9 +334,13 @@ class PerformanceSettingsDialog(QDialog):
         labels = {
             "auto": "Automatisch (Hardware versuchen, sonst CPU)",
             "none": "CPU-Decoding erzwingen",
-            "vaapi": "VA-API (Intel/AMD unter Linux)",
+            "ffmpeg": "FFmpeg CPU-Sampling (experimentell)",
+            "cuda": "NVIDIA CUDA / NVDEC über FFmpeg",
+            "vaapi": "VAAPI · Linux-GPU automatisch (AMD/Intel)",
+            "amd-vaapi": "AMD Radeon · VAAPI-Rendergerät (Linux)",
+            "intel-vaapi": "Intel-Grafik · integrierte GPU via VAAPI (Linux)",
             "qsv": "Intel Quick Sync (falls unterstützt)",
-            "d3d11": "D3D11 (Windows)",
+            "d3d11": "D3D11VA · Windows (AMD/Intel/NVIDIA)",
             "drm": "DRM (falls unterstützt)",
         }
         modes = supported_hardware_modes()
@@ -324,6 +349,7 @@ class PerformanceSettingsDialog(QDialog):
         index = self.hardware_combo.findData(current.get("hardware_accel", "auto"))
         self.hardware_combo.setCurrentIndex(max(0, index))
         self.hardware_combo.setToolTip(
+            "Auto misst bei längeren Videos kurz GPU gegen CPU und wählt die schnellere Variante. "
             "Hardware-Decoding hängt von Treiber, FFmpeg und OpenCV-Build ab. "
             "Der Matcher selbst und die Zeitankerberechnung laufen auf der CPU; "
             "nicht verfügbare Decoder fallen auf CPU-Decoding zurück."
@@ -336,6 +362,15 @@ class PerformanceSettingsDialog(QDialog):
         self.cache_check.setToolTip("Alte Ausrichtungsdaten werden nicht verwendet, bis die Episodenidentität zusätzlich geprüft wird.")
         form.addRow("Frische Analyse", self.cache_check)
 
+        self.frame_cache_check = QCheckBox("Bildfingerprints wiederverwenden (empfohlen)")
+        self.frame_cache_check.setChecked(bool(current.get("frame_cache_enabled", True)))
+        self.frame_cache_check.setToolTip(
+            "Spart erneutes Video-Decoding bei wiederholten Analysen. "
+            "Die Datei wird vorher erneut auf Änderungen geprüft; "
+            "Episodenabgleich und Sicherheitsprüfung laufen immer vollständig neu."
+        )
+        form.addRow("Video-Cache", self.frame_cache_check)
+
         self.prewarm_check = QCheckBox("Metadaten der nächsten Episoden nach dem Scan im Hintergrund vorwärmen")
         self.prewarm_check.setChecked(bool(current.get("prewarm_metadata", True)))
         self.prewarm_check.setToolTip(
@@ -345,9 +380,10 @@ class PerformanceSettingsDialog(QDialog):
         layout.addLayout(form)
 
         note = QLabel(
-            "Die Profile unterscheiden sich in CPU-Threads, Bildproben, Metadaten-Workerzahl und Audioqualität. "
-            "Leicht schont das System; Stark findet ggf. mehr Bildanker, benötigt aber länger. GPU-Decoding "
-            "beschleunigt ggf. das Einlesen; der Bildabgleich selbst läuft auf der CPU. "
+            "Alle drei Profile analysieren mit denselben Bildproben und derselben Trefferprüfung. "
+            "Leicht schont den Desktop; Stark nutzt mehr Threads und parallele lokale Zugriffe. "
+            "Die verfügbaren CPU-/RAM-Budgets werden beim Start und vor Aufträgen neu ermittelt. GPU-Decoding "
+            "wird pro Video gegen CPU geprüft; der Bildabgleich selbst läuft auf der CPU. "
             "Neue Zusatzspuren werden standardmäßig mit 128 kbit/s AAC erzeugt; vorhandene "
             "Referenz-Audiospuren bleiben unverändert."
         )
@@ -364,12 +400,10 @@ class PerformanceSettingsDialog(QDialog):
         self._applying_preset = False
         self.preset_combo.currentIndexChanged.connect(self._apply_preset)
         self.cpu_threads.valueChanged.connect(self._mark_custom)
-        self.max_samples.valueChanged.connect(self._mark_custom)
-        self.sample_interval.valueChanged.connect(self._mark_custom)
-        self.audio_bitrate.currentIndexChanged.connect(self._mark_custom)
+        # Accuracy/audio/cache are independent of the selected resource preset.
         self.hardware_combo.currentIndexChanged.connect(self._mark_custom)
-        self.cache_check.toggled.connect(self._mark_custom)
         self.probe_workers.valueChanged.connect(self._mark_custom)
+        self.sampling_workers_combo.currentIndexChanged.connect(self._mark_custom)
         self.prewarm_check.toggled.connect(self._mark_custom)
 
     def _mark_custom(self, *_args):
@@ -382,23 +416,21 @@ class PerformanceSettingsDialog(QDialog):
         preset = str(self.preset_combo.currentData() or "system")
         if preset == "custom":
             return
-        values = default_performance_settings() if preset == "system" else dict(settings_for_preset(preset), hardware_accel=default_performance_settings()["hardware_accel"])
+        values = default_performance_settings() if preset == "system" else settings_for_preset(preset)
         self._applying_preset = True
         try:
             self.cpu_threads.setValue(int(values["cpu_threads"]))
-            self.max_samples.setValue(int(values["max_samples"]))
-            self.sample_interval.setValue(float(values["sample_interval"]))
-            bitrate_index = self.audio_bitrate.findData(int(values.get("audio_bitrate_kbps", 128)))
-            if bitrate_index >= 0:
-                self.audio_bitrate.setCurrentIndex(bitrate_index)
-            if "hardware_accel" in values:
-                hw_index = self.hardware_combo.findData(values["hardware_accel"])
-                if hw_index >= 0:
-                    self.hardware_combo.setCurrentIndex(hw_index)
-            if "cache_enabled" in values:
-                self.cache_check.setChecked(bool(values["cache_enabled"]))
+            # Every built-in preset uses GPU auto-detection; a manual decoder
+            # request is an advanced/custom configuration.
+            hw_index = self.hardware_combo.findData("auto")
+            if hw_index >= 0:
+                self.hardware_combo.setCurrentIndex(hw_index)
             if "probe_workers" in values:
                 self.probe_workers.setValue(int(values["probe_workers"]))
+            if "sampling_workers" in values:
+                workers_index = self.sampling_workers_combo.findData(int(values["sampling_workers"]))
+                if workers_index >= 0:
+                    self.sampling_workers_combo.setCurrentIndex(workers_index)
             if "prewarm_metadata" in values:
                 self.prewarm_check.setChecked(bool(values["prewarm_metadata"]))
         finally:
@@ -413,7 +445,9 @@ class PerformanceSettingsDialog(QDialog):
             "audio_bitrate_kbps": int(self.audio_bitrate.currentData() or 128),
             "hardware_accel": str(self.hardware_combo.currentData() or "auto"),
             "cache_enabled": self.cache_check.isChecked(),
+            "frame_cache_enabled": self.frame_cache_check.isChecked(),
             "probe_workers": self.probe_workers.value(),
+            "sampling_workers": int(self.sampling_workers_combo.currentData() or 1),
             "prewarm_metadata": self.prewarm_check.isChecked(),
             "auto_system_profile": str(self.preset_combo.currentData() or "system") == "system",
         }
@@ -440,6 +474,16 @@ class AlignmentResidualPlot(QWidget):
         self.result = result
         self.offset = float(result.offset if offset is None and result else offset or 0.0)
         self.scale = float(result.slope if scale is None and result else scale or 1.0)
+        piecewise = bool(result and result.segments
+                         and abs(self.offset - result.offset) <= 0.00051
+                         and abs(self.scale - result.slope) <= 0.00000051)
+        description = (("Diagramm zu manuell bearbeiteten Abschnitten; Anker belegen die neuen Grenzen nicht automatisch."
+                        if result and result.manual_segments else
+                        "Diagramm der Abweichungen von den einzeln bestätigten Zeitabschnitten.")
+                       if piecewise else
+                       "Diagramm der Zeitabweichung einzelner Videoanker von der aktuellen linearen Synchronisationskorrektur.")
+        self.setAccessibleDescription(description)
+        self.setToolTip(description)
         self.update()
 
     def paintEvent(self, _event):
@@ -459,7 +503,12 @@ class AlignmentResidualPlot(QWidget):
             return
 
         anchors = result.anchors
-        residuals = [a.target_time - (self.scale * a.source_time + self.offset) for a in anchors]
+        piecewise = bool(result.segments
+                         and abs(self.offset - result.offset) <= 0.00051
+                         and abs(self.scale - result.slope) <= 0.00000051)
+        residuals = ([a.target_time - result.target_time(a.source_time) for a in anchors]
+                     if piecewise else
+                     [a.target_time - (self.scale * a.source_time + self.offset) for a in anchors])
         threshold = max(0.75, result.sample_interval * 1.20)
         max_abs = max(threshold * 1.8, max((abs(value) for value in residuals), default=0.0) * 1.15, 0.2)
         plot = outer.adjusted(12, 22, -10, -10)
@@ -499,7 +548,7 @@ class AlignmentResidualPlot(QWidget):
         painter.setPen(QColor("#d8e5f6"))
         painter.drawText(QRectF(outer.left()+10, outer.top()+3, outer.width()*0.6, 16),
                          int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-                         "ANKER-ABWEICHUNG")
+                         "ABSCHNITTS-ANKER" if piecewise else "ANKER-ABWEICHUNG")
         painter.setPen(QColor("#91a7c4"))
         painter.drawText(QRectF(outer.right()-170, outer.top()+3, 158, 16),
                          int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
@@ -587,6 +636,8 @@ class SyncPreviewDialog(QDialog):
 class SourceRow(QFrame):
     masterToggled = Signal(str)
     trackChanged = Signal()
+    segmentEditRequested = Signal(str)
+    resetSegmentRequested = Signal(str)
 
     def __init__(self, path: str, info: MediaInfo, is_master: bool = False, parent=None):
         super().__init__(parent)
@@ -601,6 +652,8 @@ class SourceRow(QFrame):
         self.setObjectName("sourceRow")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         layout.setSpacing(7)
 
         top = QHBoxLayout()
@@ -621,6 +674,7 @@ class SourceRow(QFrame):
         layout.addWidget(name)
         metadata = QLabel(describe_media(info))
         metadata.setObjectName("mutedText")
+        metadata.setWordWrap(True)
         layout.addWidget(metadata)
 
         form = QGridLayout()
@@ -628,6 +682,9 @@ class SourceRow(QFrame):
         form.setVerticalSpacing(6)
         form.addWidget(QLabel("Audiospur"), 0, 0)
         self.audio_combo = QComboBox()
+        self.audio_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.audio_combo.setMinimumContentsLength(12)
+        self.audio_combo.setAccessibleName("Audiospur auswählen")
         for ordinal, stream in enumerate(info.audio):
             lang = language_display_name(stream.language) or (stream.language.upper() if stream.language != "und" else "Sprache unbekannt")
             title = stream.title or default_track_title(stream.language, "", path) or f"Audio {ordinal + 1}"
@@ -642,6 +699,7 @@ class SourceRow(QFrame):
 
         form.addWidget(QLabel("Sprache"), 1, 0)
         self.language_edit = QLineEdit()
+        self.language_edit.setAccessibleName("Sprache der Audiospur")
         self.language_edit.setPlaceholderText("deu, eng, fra …")
         stream_language = info.audio[self.audio_combo.currentIndex()].language if info.audio else "und"
         lang = normalize_language_code(stream_language)
@@ -653,6 +711,7 @@ class SourceRow(QFrame):
         form.addWidget(self.language_edit, 1, 1)
         form.addWidget(QLabel("Trackname"), 1, 2)
         self.title_edit = QLineEdit()
+        self.title_edit.setAccessibleName("Name der Audiospur")
         stream_title = info.audio[self.audio_combo.currentIndex()].title if info.audio else ""
         self.title_edit.setText(default_track_title(lang, stream_title, path))
         self.title_edit.setToolTip("Anzeigename der Audiospur im Player, z. B. Deutsch oder English")
@@ -705,6 +764,15 @@ class SourceRow(QFrame):
         self.reset_alignment_button.setEnabled(False)
         self.reset_alignment_button.clicked.connect(self._reset_alignment)
         status_row.addWidget(self.reset_alignment_button, 0)
+        self.segment_edit_button = QPushButton("Schnittbereiche …")
+        self.segment_edit_button.setObjectName("secondaryButton")
+        self.segment_edit_button.setToolTip(
+            "Zeitbereiche der Quelle einzeln dem Master zuordnen, teilen oder deaktivieren"
+        )
+        self.segment_edit_button.setAccessibleName(f"Schnittbereiche für {Path(path).name} bearbeiten")
+        self.segment_edit_button.setEnabled(False)
+        self.segment_edit_button.clicked.connect(lambda: self.segmentEditRequested.emit(self.path))
+        status_row.addWidget(self.segment_edit_button, 0)
         layout.addLayout(status_row)
         self.residual_plot = AlignmentResidualPlot(self)
         self.residual_plot.setVisible(False)
@@ -748,6 +816,7 @@ class SourceRow(QFrame):
             self.audio_combo.setToolTip("Wähle die Quell-Audiospur, die synchronisiert und hinzugefügt werden soll.")
         self.offset_spin.setEnabled(not is_master)
         self.scale_spin.setEnabled(not is_master)
+        self.segment_edit_button.setEnabled(not is_master and self._last_alignment is not None)
 
     def _alignment_value_changed(self, *_args):
         self.manual_alignment = True
@@ -828,6 +897,9 @@ class SourceRow(QFrame):
             self.residual_plot.setVisible(True)
 
     def _reset_alignment(self):
+        if self._last_alignment is not None and self._last_alignment.manual_segments:
+            self.resetSegmentRequested.emit(self.path)
+            return
         self._commit_alignment_edit()
         result = self._last_alignment
         automatic = (float(result.offset), float(result.slope)) if result is not None else (0.0, 1.0)
@@ -853,14 +925,31 @@ class SourceRow(QFrame):
         self.residual_plot.set_alignment(result, result.offset, result.slope)
         self.residual_plot.setVisible(True)
         self._update_alignment_history_buttons()
-        status = "Gute Übereinstimmung" if result.safe_for_automatic_export else "Prüfung empfohlen"
+        status = (f"{len(result.segments)} Abschnitte manuell angepasst" if result.manual_segments else
+                  f"{len(result.segments)} Abschnitte bestätigt" if result.segments
+                  and result.safe_for_automatic_export else
+                  "Gute Übereinstimmung" if result.safe_for_automatic_export else "Prüfung empfohlen")
         self.status_label.setText(
             f"{status} · Konfidenz {result.confidence:.0%} · {len(result.anchors)} Anker · RMS {result.rms_error:.2f}s"
+        )
+        self.offset_spin.setToolTip(
+            "Manuelle Offsetkorrektur ersetzt die bestätigte Abschnittszuordnung durch einen einzigen Zeitversatz."
+            if result.segments else "Zielzeit = Zeitmaßstab × Quellzeit + Offset"
+        )
+        self.scale_spin.setToolTip(
+            "Manuelle Zeitmaßstabänderung ersetzt die bestätigte Abschnittszuordnung durch eine lineare Korrektur."
+            if result.segments else "Zeitmaßstab; 1,0 bedeutet keine Driftkorrektur"
         )
         self.status_label.setObjectName("statusGood" if result.safe_for_automatic_export else "statusWarn")
         self.status_label.style().unpolish(self.status_label)
         self.status_label.style().polish(self.status_label)
-        self.reset_alignment_button.setEnabled(self.manual_alignment)
+        self.reset_alignment_button.setEnabled(self.manual_alignment or result.manual_segments)
+        self.reset_alignment_button.setToolTip(
+            "Manuelle Schnittbearbeitung entfernen und die ursprüngliche Automatik wiederherstellen."
+            if result.manual_segments else
+            "Manuelle Zeitkorrektur entfernen und die automatisch ermittelten Werte verwenden."
+        )
+        self.segment_edit_button.setEnabled(not self.master_radio.isChecked())
 
     def set_master_choice(self, path: str):
         self._set_master(self.path == path)
@@ -1006,6 +1095,104 @@ class JobHistoryDialog(QDialog):
         self.details.setPlainText(json.dumps(details, ensure_ascii=False, indent=2, default=str))
 
 
+class BatchQueueDialog(QDialog):
+    """Explicit restart/retry controls; never execute persisted work on opening."""
+
+    STATE_LABELS = {
+        "queued": "Wartet", "running": "Läuft", "paused": "Pausiert",
+        "interrupted": "Unterbrochen", "cancelled": "Abgebrochen",
+        "failed": "Fehlgeschlagen", "needs_review": "Prüfung nötig",
+        "completed": "Abgeschlossen",
+    }
+    STARTABLE = {"queued", "interrupted", "cancelled", "failed", "needs_review"}
+
+    def __init__(self, entries: list[dict[str, Any]], *, busy: bool = False, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("DubSync Studio · Stapel-Warteschlange")
+        self.resize(1040, 570)
+        self.action: str | None = None
+        self.job_id: str | None = None
+        self._entries = entries
+        layout = QVBoxLayout(self)
+        intro = QLabel("Gespeicherte Aufträge bleiben nach einem Neustart erhalten. "
+                       "Fortsetzen prüft Quellen und fertige MKVs erneut; es überschreibt nichts automatisch.")
+        intro.setWordWrap(True)
+        intro.setObjectName("mutedText")
+        layout.addWidget(intro)
+        self.table = QTableWidget(len(entries), 5)
+        self.table.setAccessibleName("Gespeicherte Stapelaufträge")
+        self.table.setHorizontalHeaderLabels(["Angelegt (UTC)", "Status", "Auftrag", "Fortschritt", "Letzte Meldung"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        for col in (0, 1, 3):
+            self.table.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        for col in (2, 4):
+            self.table.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
+        for row, entry in enumerate(entries):
+            current, total = entry.get("progress_current", 0), entry.get("progress_total", 0)
+            status = self.STATE_LABELS.get(entry.get("state", ""), str(entry.get("state", "")))
+            values = [entry.get("created_at", ""), status, entry.get("label", ""),
+                      f"{current}/{total}" if total else "—",
+                      entry.get("error_text") or entry.get("progress_message", "")]
+            for col, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                if col == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, entry["id"])
+                item.setToolTip(str(value))
+                self.table.setItem(row, col, item)
+        layout.addWidget(self.table, 1)
+        self.details = QLabel("Wähle einen Auftrag, um den Ressourcen- und Protokollstatus zu sehen.")
+        self.details.setObjectName("mutedText")
+        self.details.setWordWrap(True)
+        layout.addWidget(self.details)
+        actions = QHBoxLayout()
+        self.start_button = QPushButton("Ausgewählten starten / fortsetzen")
+        self.start_button.clicked.connect(lambda: self._finish("start"))
+        self.retry_button = QPushButton("Probleme neu einplanen")
+        self.retry_button.setObjectName("secondaryButton")
+        self.retry_button.clicked.connect(lambda: self._finish("retry"))
+        self.drain_button = QPushButton("Alle wartenden abarbeiten")
+        self.drain_button.setObjectName("secondaryButton")
+        self.drain_button.clicked.connect(lambda: self._finish("drain"))
+        for button in (self.start_button, self.retry_button, self.drain_button):
+            actions.addWidget(button)
+        actions.addStretch(1)
+        close = QPushButton("Schließen")
+        close.clicked.connect(self.reject)
+        actions.addWidget(close)
+        layout.addLayout(actions)
+        self._busy = busy
+        self.table.itemSelectionChanged.connect(self._selection_changed)
+        if entries:
+            self.table.selectRow(0)
+        self._selection_changed()
+
+    def _selection_changed(self):
+        row = self.table.currentRow()
+        entry = self._entries[row] if 0 <= row < len(self._entries) else None
+        state = entry.get("state") if entry else ""
+        self.start_button.setEnabled(not self._busy and state in self.STARTABLE)
+        self.retry_button.setEnabled(not self._busy and state in
+                                     {"failed", "cancelled", "needs_review", "interrupted", "completed"}
+                                     and bool(entry.get("journal_path")))
+        self.drain_button.setEnabled(not self._busy and any(
+            item.get("state") == "queued" for item in self._entries))
+        self.details.setText(
+            (f"{entry.get('resource_reason') or 'Ressourcen werden beim Start bestimmt.'} "
+             f"{'Protokoll vorhanden.' if entry.get('journal_path') else 'Noch kein Protokoll erstellt.'} "
+             "Ausgaben bleiben erhalten; neue Versuche überschreiben nichts ungefragt.")
+            if entry else "Keine Aufträge. Scanne Medien und plane einen Serien-Stapel ein."
+        )
+
+    def _finish(self, action: str):
+        self.action = action
+        row = self.table.currentRow()
+        self.job_id = self._entries[row]["id"] if 0 <= row < len(self._entries) else None
+        self.accept()
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1018,6 +1205,17 @@ class MainWindow(QMainWindow):
         except Exception:
             self._logger.exception("Persistenter Job-Verlauf konnte nicht initialisiert werden.")
             self.history = None
+        try:
+            self.batch_queue = BatchJobQueue()
+            count = self.batch_queue.recover_interrupted()
+            if count:
+                self._logger.warning("%d Stapel können ausdrücklich fortgesetzt werden.", count)
+        except Exception:
+            self._logger.exception("Persistente Warteschlange konnte nicht initialisiert werden.")
+            self.batch_queue = None
+        self._active_queue_job_id: str | None = None
+        self._queue_drain_active = False
+        self._last_queue_room_refresh = 0.0
         self._active_history_job_id: str | None = None
         self.current_project_path: str | None = None
         self.project_dirty = False
@@ -1026,8 +1224,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{APP_TITLE} · {APP_VERSION}")
         self.setWindowIcon(QIcon(str(APP_LOGO)))
         self.setAcceptDrops(True)
-        self.resize(1380, 860)
-        self.setMinimumSize(980, 630)
+        self.resize(1440, 900)
+        self.setMinimumSize(980, 680)
         # Every launch is a fresh working session. Never restore a previous
         # library, track/master assignments or an implicitly remembered project.
         # Explicitly opened .dubsync project files still work when requested.
@@ -1036,6 +1234,7 @@ class MainWindow(QMainWindow):
         self.root_languages: dict[str, dict[str, str]] = {}
         self.track_overrides: dict[str, dict[str, Any]] = {}
         self.master_overrides: dict[str, str] = {}
+        self.manual_segment_overrides: dict[tuple[str, str], dict[str, Any]] = {}
         self._track_override_timer = QTimer(self)
         self._track_override_timer.setSingleShot(True)
         self._track_override_timer.setInterval(450)
@@ -1071,6 +1270,7 @@ class MainWindow(QMainWindow):
         self.groups: list[EpisodeGroup] = []
         self.media_cache: dict[str, MediaInfo] = {}
         self.alignments: dict[tuple[str, str], AlignmentResult] = {}
+        self.automatic_alignments: dict[tuple[str, str], AlignmentResult] = {}
         # A private temporary database prevents even accidental reuse of an old
         # on-disk alignment cache. It disappears when the application exits.
         self._session_cache_dir = tempfile.TemporaryDirectory(prefix="dubsync-session-")
@@ -1118,17 +1318,18 @@ class MainWindow(QMainWindow):
         header.setSpacing(14)
         logo = QLabel()
         logo.setObjectName("brandLogo")
-        logo.setPixmap(QIcon(str(APP_LOGO)).pixmap(QSize(54, 54)))
-        logo.setFixedSize(58, 58)
+        logo.setPixmap(QIcon(str(APP_LOGO)).pixmap(QSize(34, 34)))
+        logo.setFixedSize(38, 38)
         logo.setAccessibleName("DubSync Studio Logo")
         header.addWidget(logo, 0, Qt.AlignmentFlag.AlignVCenter)
         brand = QVBoxLayout()
         brand.setSpacing(3)
-        title = QLabel("DubSync <span style='color:#75c8ff'>Studio</span>")
+        title = QLabel("DubSync Studio")
         title.setObjectName("brandTitle")
         title.setTextFormat(Qt.TextFormat.RichText)
-        subtitle = QLabel("MEHRSPRACHIGE FASSUNGEN  ·  LOKALE ANALYSE  ·  SYNCHRONISIERTER EXPORT")
+        subtitle = QLabel("BILD BEHALTEN. SPRACHEN VERBINDEN.")
         subtitle.setObjectName("mutedText")
+        self.brand_subtitle = subtitle
         brand.addWidget(title)
         brand.addWidget(subtitle)
         header.addLayout(brand)
@@ -1137,6 +1338,10 @@ class MainWindow(QMainWindow):
         self.tool_badge.setObjectName("statusChip")
         self.tool_badge.setAccessibleName("Status der Medienwerkzeuge")
         header.addWidget(self.tool_badge, alignment=Qt.AlignmentFlag.AlignVCenter)
+        self.release_badge = QLabel("2.0 · BETA")
+        self.release_badge.setObjectName("releaseBadge")
+        self.release_badge.setToolTip("Vorabversion: automatische Regressionen geprüft; NAS und reale GPU-/Desktop-Systeme bleiben Release-Gates.")
+        header.addWidget(self.release_badge, alignment=Qt.AlignmentFlag.AlignVCenter)
         self.session_badge = QLabel("NEUE SITZUNG")
         self.session_badge.setObjectName("statusChip")
         self.session_badge.setToolTip(
@@ -1154,12 +1359,12 @@ class MainWindow(QMainWindow):
         source_bar = QHBoxLayout(source_strip)
         source_bar.setContentsMargins(12, 8, 12, 8)
         source_bar.setSpacing(8)
-        source_step = QLabel("01  QUELLEN")
+        source_step = QLabel("QUELLEN")
         source_step.setObjectName("workflowStep")
         source_step.setMinimumWidth(96)
         source_bar.addWidget(source_step)
 
-        self.add_folder_button = QPushButton("＋  Ordner hinzufügen")
+        self.add_folder_button = QPushButton("Ordner hinzufügen")
         self.add_folder_button.setObjectName("primaryButton")
         self.add_folder_button.clicked.connect(self.add_folder)
         self.add_folder_button.setAccessibleName("Lokalen oder eingehängten Medienordner hinzufügen")
@@ -1175,7 +1380,7 @@ class MainWindow(QMainWindow):
         self.remove_folder_button.clicked.connect(self.remove_folder)
         source_bar.addWidget(self.remove_folder_button)
         source_bar.addStretch(1)
-        self.scan_button = QPushButton("Bibliothek scannen  ⟳")
+        self.scan_button = QPushButton("Bibliothek scannen")
         self.scan_button.setObjectName("secondaryButton")
         self.scan_button.setToolTip("F5 · Ordner nach Episoden und Sprachfassungen durchsuchen.")
         self.scan_button.clicked.connect(self.scan_library)
@@ -1190,7 +1395,7 @@ class MainWindow(QMainWindow):
         analysis_bar = QHBoxLayout(analysis_strip)
         analysis_bar.setContentsMargins(12, 8, 12, 8)
         analysis_bar.setSpacing(8)
-        analysis_step = QLabel("02  SYNCHRONISIEREN")
+        analysis_step = QLabel("ABGLEICH")
         analysis_step.setObjectName("workflowStep")
         analysis_bar.addWidget(analysis_step)
         self.analyze_button = QPushButton("Analyse starten")
@@ -1208,23 +1413,24 @@ class MainWindow(QMainWindow):
         self.batch_diagnostic_button.setToolTip("Gesamten Stapellauf mit ALLEN Episoden und Analyseversuchen anzeigen · Strg+Umschalt+D")
         self.batch_diagnostic_button.clicked.connect(self._show_batch_diagnostic)
         analysis_bar.addWidget(self.batch_diagnostic_button)
-        self.preview_button = QPushButton("♫  Hörprobe")
+        self.preview_button = QPushButton("Hörprobe")
         self.preview_button.setToolTip("Synchronisierte Audiospur an frühen, mittleren oder späten Zeitpunkten anhören.")
         self.preview_button.setAccessibleName("Synchronisierte Hörprobe öffnen")
         self.preview_button.clicked.connect(self.preview_sync_audio)
         self.preview_button.setEnabled(False)
         analysis_bar.addWidget(self.preview_button)
-        action_row.addWidget(analysis_strip, 3)
+        analysis_bar.addStretch(1)
+        action_row.addWidget(analysis_strip, 1)
 
         export_strip = QFrame()
         export_strip.setObjectName("workflowStrip")
         export_bar = QHBoxLayout(export_strip)
         export_bar.setContentsMargins(12, 8, 12, 8)
         export_bar.setSpacing(8)
-        export_step = QLabel("03  EXPORT")
+        export_step = QLabel("EPISODE")
         export_step.setObjectName("workflowStep")
         export_bar.addWidget(export_step)
-        self.export_button = QPushButton("MKV erstellen  ↗")
+        self.export_button = QPushButton("MKV erstellen")
         self.export_button.setObjectName("primaryButton")
         self.export_button.setToolTip("Nur die gewählte Episode als mehrsprachige MKV erstellen.")
         self.export_button.clicked.connect(self.export_selected)
@@ -1233,7 +1439,7 @@ class MainWindow(QMainWindow):
         self.batch_button.setToolTip("Mehrere Episoden verarbeiten; unsichere Folgen werden zur Prüfung markiert.")
         self.batch_button.clicked.connect(self.export_batch)
         export_bar.addWidget(self.batch_button)
-        action_row.addWidget(export_strip, 4)
+        action_row.addWidget(export_strip, 1)
         root.addLayout(action_row)
 
         # An in-context explanation prevents a cancelled job being confused with
@@ -1304,6 +1510,14 @@ class MainWindow(QMainWindow):
         self.skip_existing_check.setToolTip("Ausgeschaltet: DubSync berechnet die Episoden neu und fragt vor dem Ersetzen vorhandener MKVs nach.")
         self.skip_existing_check.toggled.connect(self._output_options_changed)
         output_options.addWidget(self.skip_existing_check)
+        self._resume_journal_path: str | None = None
+        self.resume_batch_button = QPushButton("Stapel fortsetzen …")
+        self.resume_batch_button.setObjectName("secondaryButton")
+        self.resume_batch_button.setToolTip(
+            "Ein früheres Stapelprotokoll auswählen. Nur erneut verifizierte Exporte werden übersprungen."
+        )
+        self.resume_batch_button.clicked.connect(self._choose_resume_journal)
+        output_options.addWidget(self.resume_batch_button)
         output_options.addStretch(1)
         self.root_languages_button = QPushButton("Sprachen / Tracknamen …")
         self.root_languages_button.setToolTip("Je Quellordner eine Sprache und einen sichtbaren MKV-Tracknamen festlegen.")
@@ -1316,6 +1530,10 @@ class MainWindow(QMainWindow):
         self.output_preview_label.setWordWrap(True)
         self.output_preview_label.setAccessibleName("Vorschau des geplanten Ausgabepfades")
         output_layout.addWidget(self.output_preview_label)
+        self.resume_batch_hint = QLabel("Fortsetzen: kein Stapelprotokoll ausgewählt")
+        self.resume_batch_hint.setObjectName("statusMuted")
+        self.resume_batch_hint.setWordWrap(True)
+        output_layout.addWidget(self.resume_batch_hint)
         root.addWidget(output_panel)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -1326,7 +1544,7 @@ class MainWindow(QMainWindow):
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(14, 14, 14, 14)
         left_layout.setSpacing(10)
-        left_layout.addWidget(self._section_title("Bibliothek", "Serien, Staffeln und erkannte Sprachfassungen"))
+        left_layout.addWidget(self._section_title("Episoden", "Fassungen rechts abgleichen."))
         self.root_hint = QLabel("Ordner oder Videodateien hier hineinziehen · NAS über die Quellenleiste hinzufügen")
         self.root_hint.setObjectName("dropHint")
         self.root_hint.setWordWrap(True)
@@ -1357,6 +1575,7 @@ class MainWindow(QMainWindow):
         self.episode_filter_timer.setInterval(120)
         self.episode_filter_timer.timeout.connect(self._filter_episodes)
         self.episode_search.textChanged.connect(lambda _text: self.episode_filter_timer.start())
+        self.episode_search.textChanged.connect(self._search_cleared)
         filter_row.addWidget(self.episode_search, 1)
         self.episode_filter = QComboBox()
         self.episode_filter.addItem("Alle", "all")
@@ -1372,7 +1591,7 @@ class MainWindow(QMainWindow):
         self.episode_table.setAccessibleName("Erkannte Serien und Episoden")
         self.episode_table.setAccessibleDescription("Wähle eine Episode, um Bildmaster, Audiospuren und Synchronisationsqualität zu konfigurieren.")
         self.episode_table.verticalHeader().setVisible(False)
-        self.episode_table.verticalHeader().setDefaultSectionSize(34)
+        self.episode_table.verticalHeader().setDefaultSectionSize(44)
         self.episode_table.horizontalHeader().setMinimumHeight(38)
         self.episode_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.episode_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -1408,9 +1627,12 @@ class MainWindow(QMainWindow):
         self.detail_layout = QVBoxLayout(self.detail_content)
         self.detail_layout.setContentsMargins(2, 2, 2, 2)
         self.detail_layout.setSpacing(10)
-        self.detail_empty = QLabel("Noch keine Episode ausgewählt")
-        self.detail_empty.setObjectName("mutedText")
+        self.detail_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        self.detail_empty = QLabel("Dein Schnittplatz ist bereit.\n\nFüge die Ordner deiner Sprachfassungen hinzu\nund starte den Bibliotheksscan.\n\nHier prüfst du anschließend Bildmaster, Tonspuren\nund den ermittelten Zeitversatz.")
+        self.detail_empty.setObjectName("emptyState")
+        self.detail_empty.setWordWrap(True)
         self.detail_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.detail_layout.addStretch(1)
         self.detail_layout.addWidget(self.detail_empty)
         self.detail_layout.addStretch(1)
         self.detail_scroll.setWidget(self.detail_content)
@@ -1424,11 +1646,12 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.progress.setTextVisible(True)
-        self.progress.setMaximumWidth(300)
+        self.progress.setFixedWidth(180)
         bottom.addWidget(self.progress)
         self.activity_label = QLabel("Bereit")
         self.activity_label.setObjectName("mutedText")
-        self.activity_label.setMinimumWidth(180)
+        self.activity_label.setMinimumWidth(0)
+        self.activity_label.setWordWrap(True)
         bottom.addWidget(self.activity_label, 1)
         self.progress_plot = ProgressHistoryPlot()  # retained for compatibility; intentionally not shown
         self.pause_button = QPushButton("Pause")
@@ -1456,12 +1679,14 @@ class MainWindow(QMainWindow):
         root.addLayout(bottom)
         self.progress_detail = QLabel("Keine Verarbeitung aktiv")
         self.progress_detail.setObjectName("progressDetail")
+        self.progress_detail.setWordWrap(True)
         self.progress_detail.setAccessibleName("Aktueller Verarbeitungsschritt")
         root.addWidget(self.progress_detail)
 
         self.log_view = QTextEdit()
         self.log_view.setObjectName("logView")
         self.log_view.setReadOnly(True)
+        self.log_view.document().setMaximumBlockCount(3000)
         self.log_view.setMaximumHeight(105)
         self.log_view.setPlaceholderText("Analyseberichte, Warnungen und übersprungene Episoden erscheinen hier.")
         self.log_view.hide()
@@ -1489,86 +1714,129 @@ class MainWindow(QMainWindow):
 
         self._page_stack = QStackedWidget()
         self._page_stack.setObjectName("workspacePages")
-        shell = QHBoxLayout()
-        shell.setSpacing(14)
+        shell = QVBoxLayout()
+        shell.setSpacing(12)
+        navigation = QFrame()
+        navigation.setObjectName("navigation")
+        nav = QHBoxLayout(navigation)
+        nav.setContentsMargins(4, 4, 12, 4)
+        nav.setSpacing(4)
+        self._nav_buttons = []
+        self.navigation_group = QButtonGroup(self)
+        self.navigation_group.setExclusive(True)
+        for index, label in enumerate(("Studio", "Stapelzentrale", "Aktivität")):
+            button = QPushButton(label)
+            button.setObjectName("navButton")
+            button.setCheckable(True)
+            button.setMinimumWidth(130)
+            button.setMinimumHeight(34)
+            button.setAccessibleName(label)
+            button.setShortcut(f"Alt+{index + 1}")
+            button.setToolTip(f"{label} · Alt+{index + 1}")
+            self.navigation_group.addButton(button, index)
+            button.clicked.connect(lambda _checked=False, page=index: self._navigate_to(page))
+            nav.addWidget(button)
+            self._nav_buttons.append(button)
+        nav.addStretch(1)
+        self.sidebar_state = QLabel("Neue Sitzung")
+        self.sidebar_state.setObjectName("mutedText")
+        self.sidebar_state.setWordWrap(False)
+        nav.addWidget(self.sidebar_state)
+        shell.addWidget(navigation)
 
-        sidebar = QFrame()
-        sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(205)
-        side = QVBoxLayout(sidebar)
-        side.setContentsMargins(12, 18, 12, 16)
-        side.setSpacing(10)
-        section = QLabel("ARBEITSBEREICH")
-        section.setObjectName("eyebrow")
-        side.addWidget(section)
-        self._nav_buttons: list[QPushButton] = []
-        for i, (label, hint) in enumerate((
-            ("01  Bibliothek", "Quellen & Episoden"),
-            ("02  Export", "Ziel & Stapel"),
-            ("03  Aktivität", "Fortschritt & Berichte"),
-        )):
-            btn = QPushButton(label)
-            btn.setObjectName("navButton")
-            btn.setCheckable(True)
-            btn.setAccessibleName(hint)
-            btn.setToolTip(hint)
-            btn.setMinimumHeight(44)
-            btn.clicked.connect(lambda _checked=False, index=i: self._navigate_to(index))
-            side.addWidget(btn)
-            self._nav_buttons.append(btn)
-        side.addSpacing(12)
-        side.addWidget(self._sidebar_caption("SO FUNKTIONIERT'S"))
-        self.sidebar_hint = QLabel(
-            "1. Zwei Fassungen hinzufügen\n\n"
-            "2. Bibliothek scannen\n\n"
-            "3. Export starten\n\n"
-            "DubSync prüft die tatsächlichen Episodenbilder."
-        )
-        self.sidebar_hint.setWordWrap(True)
-        self.sidebar_hint.setObjectName("mutedText")
-        side.addWidget(self.sidebar_hint)
-        side.addStretch(1)
-        self.sidebar_state = QLabel("Neue Sitzung · 0 Quellen")
-        self.sidebar_state.setWordWrap(True)
-        self.sidebar_state.setObjectName("navFootnote")
-        side.addWidget(self.sidebar_state)
-        shell.addWidget(sidebar)
+        # Sources span the workspace; episode list and inspector get the full width.
+        left_layout = splitter.widget(0).layout()
+        left_layout.removeWidget(self.root_hint)
+        left_layout.removeWidget(self.root_list)
+        self.root_hint.setText("Medienordner hier ablegen · oder Ordner / NAS hinzufügen")
+        self.root_list.setMaximumHeight(72)
+        self.root_list.setMinimumHeight(56)
+        source_panel = QFrame()
+        self.sources_panel = source_panel
+        source_panel.setObjectName("sourcePanel")
+        source_panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        source_layout = QVBoxLayout(source_panel)
+        source_layout.setContentsMargins(0, 0, 0, 0)
+        source_layout.setSpacing(0)
+        source_strip.setFixedHeight(54)
+        source_layout.addWidget(source_strip)
+        source_layout.addWidget(self.root_hint)
+        source_layout.addWidget(self.root_list)
+        self.sources_toggle = QPushButton("Quellen anzeigen")
+        self.sources_toggle.setCheckable(True)
+        self.sources_toggle.setChecked(True)
+        self.sources_toggle.setToolTip("Quellenliste ein- oder ausblenden; Dateien bleiben unverändert")
+        self.sources_toggle.toggled.connect(self._toggle_sources)
+        source_strip.layout().insertWidget(1, self.sources_toggle)
+        splitter.setHandleWidth(8)
+        splitter.widget(0).setMinimumWidth(232)
+        splitter.widget(1).setMinimumWidth(300)
 
-        # Page 1: source selection and fine-grained episode inspection.
+        self.library_empty = QLabel("Noch keine Episoden\nFüge Quellen hinzu und wähle Bibliothek scannen.")
+        self.library_empty.setObjectName("emptyState")
+        self.library_empty.setWordWrap(True)
+        self.library_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.episode_surface = QStackedWidget()
+        left_layout.removeWidget(self.episode_table)
+        self.episode_surface.addWidget(self.library_empty)
+        self.episode_surface.addWidget(self.episode_table)
+        left_layout.addWidget(self.episode_surface, 1)
+
+        # The domain engine and the existing track editor stay authoritative.
+        # This is a read-only, on-demand visual inspection surface between them.
+        self.review_panel = StudioReviewPanel()
+        self.review_panel.audioRequested.connect(self.preview_sync_audio)
+        self.review_panel.sourceChanged.connect(self._review_source_changed)
+        review_scroll = QScrollArea()
+        review_scroll.setObjectName("reviewViewport")
+        review_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        review_scroll.setWidgetResizable(True)
+        review_scroll.setWidget(self.review_panel)
+        review_scroll.setMinimumWidth(290)
+        splitter.insertWidget(1, review_scroll)
+        splitter.setSizes([310, 435, 515])
+
+        # Page 1: real three-pane review desk, one episode at a time.
         library = QWidget()
         lib = QVBoxLayout(library)
         lib.setContentsMargins(4, 2, 3, 2)
         lib.setSpacing(11)
-        lib.addWidget(self._page_heading(
-            "Bibliothek", "Füge beide Fassungen hinzu, scanne und prüfe die erkannten Episoden."
-        ))
-        lib.addWidget(source_strip)
+        self.library_heading = self._page_heading(
+            "Studio", "Episode wählen · Bildanker prüfen · Sprachspuren konfigurieren."
+        )
+        lib.addWidget(self.library_heading)
+        lib.addWidget(source_panel)
         lib.addWidget(splitter, 1)
+        for button in (self.diagnostic_button, self.batch_diagnostic_button):
+            button.parentWidget().layout().removeWidget(button)
+            button.hide()
         lib.addLayout(action_row)
         continue_row = QHBoxLayout()
         self.library_status = QLabel("Noch keine Quellen hinzugefügt")
         self.library_status.setObjectName("mutedText")
+        self.library_status.setWordWrap(True)
         continue_row.addWidget(self.library_status, 1)
-        self.to_export_button = QPushButton("Weiter: Stapel & Export  →")
+        self.to_export_button = QPushButton("Stapel vorbereiten →")
         self.to_export_button.setObjectName("primaryButton")
         self.to_export_button.clicked.connect(lambda: self._navigate_to(1))
-        continue_row.addWidget(self.to_export_button)
+        self.export_button.parentWidget().layout().addWidget(self.to_export_button)
         lib.addLayout(continue_row)
+        self.episode_surface.setMinimumHeight(110)
         self._page_stack.addWidget(library)
 
-        # Page 2: batch setup, performance cards, predictable one-click launch.
+        # Page 2: batch setup and persistent control room.
         export_page = QWidget()
         ex = QVBoxLayout(export_page)
         ex.setContentsMargins(4, 2, 3, 4)
         ex.setSpacing(14)
         ex.addWidget(self._page_heading(
-            "Export vorbereiten", "Prüfe Zielordner und Leistungsprofil. Starte dann den gesamten Stapel."
+            "Stapelzentrale", "Aufträge kontrollieren, fortsetzen oder prüfen · unten Ziel und Leistungsprofil festlegen."
         ))
         summary_card = QFrame()
         summary_card.setObjectName("heroCard")
         sc = QVBoxLayout(summary_card)
-        sc.setContentsMargins(20, 17, 20, 17)
-        sc.setSpacing(11)
+        sc.setContentsMargins(15, 10, 15, 10)
+        sc.setSpacing(5)
         sc.addWidget(self._sidebar_caption("DEIN STAPEL"))
         self.export_overview_label = QLabel("Noch keine Episoden erkannt")
         self.export_overview_label.setObjectName("heroNumber")
@@ -1585,6 +1853,12 @@ class MainWindow(QMainWindow):
         self.batch_button.setText("Gesamten Stapel starten  →")
         self.batch_button.setObjectName("primaryButton")
         self.batch_button.setMinimumHeight(44)
+        self.queue_button = QPushButton("Queue-Details …")
+        self.queue_button.setObjectName("secondaryButton")
+        self.queue_button.setMinimumHeight(44)
+        self.queue_button.setToolTip("Gespeicherte Serien-Stapel starten, nach Neustart fortsetzen oder problematische Folgen erneut einplanen.")
+        self.queue_button.clicked.connect(self._show_batch_queue)
+        button_row.addWidget(self.queue_button)
         button_row.addWidget(self.batch_button)
         sc.addLayout(button_row)
         ex.addWidget(summary_card)
@@ -1599,8 +1873,8 @@ class MainWindow(QMainWindow):
         profile_line.addWidget(QLabel("Profil"))
         self.profile_quick_combo = QComboBox()
         self.profile_quick_combo.setAccessibleName("Leistungsprofil auswählen")
-        for label, value in (("Auto (Hardware erkennen)", "system"),
-                             ("Leicht", "fast"), ("Ausgewogen", "balanced"),
+        for label, value in ((f"Auto (Empfehlung: {PROFILE_LABELS[recommended_profile()]})", "system"),
+                             ("Leicht", "fast"), ("Mittel", "balanced"),
                              ("Stark", "quality"), ("Benutzerdefiniert", "custom")):
             self.profile_quick_combo.addItem(label, value)
         index = self.profile_quick_combo.findData(self.performance_settings["preset"])
@@ -1620,8 +1894,20 @@ class MainWindow(QMainWindow):
         self.profile_tradeoff.setObjectName("pathPreview")
         perf.addWidget(self.profile_tradeoff)
         ex.addWidget(perf_card)
-        ex.addStretch(1)
-        self._page_stack.addWidget(export_page)
+        self.queue_room = QueueControlRoom()
+        self.queue_room.startRequested.connect(self._start_inline_queued_batch)
+        self.queue_room.retryRequested.connect(self._retry_inline_queue)
+        self.queue_room.drainRequested.connect(self._drain_inline_queue)
+        self.queue_room.refreshRequested.connect(self._refresh_inline_queue)
+        # Operations-first: persisted jobs are visible before the long settings
+        # form; setup stays below in the same independently scrolling page.
+        ex.insertWidget(1, self.queue_room, 1)
+        export_scroll = QScrollArea()
+        export_scroll.setObjectName("pageScroll")
+        export_scroll.setWidgetResizable(True)
+        export_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        export_scroll.setWidget(export_page)
+        self._page_stack.addWidget(export_scroll)
 
         # Page 3: readable execution log, full batch reports and history.
         activity = QWidget()
@@ -1632,13 +1918,13 @@ class MainWindow(QMainWindow):
             "Aktivität & Diagnose", "Jede Episode, jeder Skip-Grund und alle Analyseversuche bleiben nachvollziehbar."
         ))
         report_row = QHBoxLayout()
-        full_report = QPushButton("Stapel-Gesamtprotokoll öffnen")
-        full_report.setObjectName("primaryButton")
-        full_report.clicked.connect(self._show_batch_diagnostic)
-        report_row.addWidget(full_report)
-        alignment_report = QPushButton("Bildabgleich-Diagnose")
-        alignment_report.clicked.connect(self._show_alignment_diagnostic)
-        report_row.addWidget(alignment_report)
+        self.batch_diagnostic_button.setText("Stapel-Gesamtprotokoll öffnen")
+        self.batch_diagnostic_button.setObjectName("primaryButton")
+        self.batch_diagnostic_button.show()
+        report_row.addWidget(self.batch_diagnostic_button)
+        self.diagnostic_button.setText("Bildabgleich-Diagnose")
+        self.diagnostic_button.show()
+        report_row.addWidget(self.diagnostic_button)
         history = QPushButton("Job-Verlauf")
         history.clicked.connect(self._show_job_history)
         report_row.addWidget(history)
@@ -1677,6 +1963,19 @@ class MainWindow(QMainWindow):
         self.log_toggle_button.clicked.connect(lambda: self._navigate_to(2))
         self._navigate_to(0)
         self._update_quick_profile_summary()
+        self._refresh_inline_queue()
+
+    def _toggle_sources(self, expanded: bool):
+        self.root_list.setVisible(expanded and bool(self.roots))
+        self.sources_panel.setFixedHeight(126 if expanded and self.roots else 54 if self.roots else 88)
+        self.sources_toggle.setText(f"{len(self.roots)} Quellen {'▾' if expanded else '▸'}")
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "library_heading"):
+            compact = self.height() < 950
+            self.library_heading.setVisible(not compact)
+            self.brand_subtitle.setVisible(not compact)
 
     @staticmethod
     def _sidebar_caption(text: str) -> QLabel:
@@ -1705,27 +2004,93 @@ class MainWindow(QMainWindow):
         for index, button in enumerate(self._nav_buttons):
             button.setChecked(index == page)
         self.statusBar().showMessage(
-            ("Quellen und Episoden", "Stapel und Ausgabe", "Verarbeitung und Diagnose")[page], 2500
+            ("Quellen · Framevergleich · Spuren", "Stapel und Ausgabe", "Verarbeitung und Diagnose")[page], 2500
         ) if self.statusBar() is not None else None
+        if page == 1 and hasattr(self, "queue_room"):
+            self._refresh_inline_queue()
+
+    def _review_source_changed(self, _path: str):
+        self.review_panel.refresh(self._review_alignments())
+
+    def _focus_episode_search(self):
+        self._navigate_to(0)
+        self.episode_search.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self.episode_search.selectAll()
+
+    def _review_alignments(self) -> dict[tuple[str, str], AlignmentResult]:
+        """Show manual timing in the review without modifying export evidence."""
+        mapped = dict(self.alignments)
+        master = self.selected_master
+        if master:
+            for path, row in self.source_rows.items():
+                key = (master, path)
+                original = mapped.get(key)
+                if original is not None and row.manual_alignment:
+                    mapped[key] = replace(original, slope=row.scale_spin.value(),
+                                          offset=row.offset_spin.value(), segments=[],
+                                          manual_segments=True)
+        return mapped
+
+    def _refresh_inline_queue(self):
+        if not hasattr(self, "queue_room"):
+            return
+        if self.batch_queue is None:
+            self.queue_room.set_entries([])
+            self.queue_room.detail_label.setText("Warteschlange nicht verfügbar; Details im Systemprotokoll.")
+            return
+        try:
+            entries = self.batch_queue.recent(100)
+        except (QueueError, OSError, ValueError) as exc:
+            self.queue_room.set_entries([])
+            self.queue_room.detail_label.setText(f"Warteschlange kann nicht geladen werden: {exc}")
+            return
+        self.queue_room.set_entries(entries, busy=self.worker is not None)
+
+    def _start_inline_queued_batch(self, job_id: str):
+        self._queue_drain_active = False
+        if self._start_queued_batch(job_id):
+            self._refresh_inline_queue()
+
+    def _retry_inline_queue(self, job_id: str):
+        if self.worker is not None or self.batch_queue is None:
+            return
+        try:
+            created = self.batch_queue.retry_problematic(job_id)
+            self._log(f"Neuer Prüfauftrag: {created[:8]} · nur problematische Episoden")
+            self.statusBar().showMessage("Problematische Episoden neu eingeplant · manuell starten", 6000)
+            self._refresh_inline_queue()
+        except (QueueError, OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Wiederaufnahme nicht möglich", str(exc))
+
+    def _drain_inline_queue(self):
+        if self.worker is None:
+            self._queue_drain_active = True
+            self._run_next_queued_batch()
+            self._refresh_inline_queue()
 
     def _refresh_workflow_summary(self):
         if not hasattr(self, "export_overview_label"):
             return
         count = sum(len(group.files) >= 2 for group in self.groups)
         missing = sum(len(group.files) < 2 for group in self.groups)
-        self.export_overview_label.setText(f"{count} Episoden bereit" if count else "Noch keine Episoden bereit")
+        self.export_overview_label.setText(f"{count} Episoden im Stapel" if count else "Noch keine Episoden im Stapel")
         self.export_overview_detail.setText(
             f"{len(self.groups)} Gruppen erkannt · {count} mit mindestens zwei Videodateien"
             + (f" · {missing} nur mit einer Fassung" if missing else "")
             if self.groups else "Füge deine Quellordner hinzu und scanne die Bibliothek."
         )
         self.library_status.setText(
-            f"{len(self.roots)} Quellen · {len(self.groups)} Episodengruppen · {count} bereit für Stapel"
+            f"{count} Gruppen mit mehreren Fassungen · Synchronisation wird beim Export geprüft"
         )
         self.sidebar_state.setText(
-            f"{len(self.roots)} Quellen\n{count} exportierbare Gruppen\n{PROFILE_LABELS.get(self.performance_settings['preset'], 'Auto')}"
+            f"{len(self.roots)} Quellen · {len(self.groups)} Episoden · {PROFILE_LABELS.get(self.performance_settings['preset'], 'Auto')}"
         )
         self.to_export_button.setEnabled(count > 0 and self.worker is None)
+        self.root_list.setVisible(bool(self.roots) and self.sources_toggle.isChecked())
+        self.sources_toggle.setVisible(bool(self.roots))
+        self.sources_toggle.setText(f"{len(self.roots)} Quellen {'▾' if self.sources_toggle.isChecked() else '▸'}")
+        self.root_hint.setVisible(not self.roots)
+        self.sources_panel.setFixedHeight(126 if self.roots and self.sources_toggle.isChecked() else 54 if self.roots else 88)
 
     def _quick_profile_changed(self, _index: int):
         if self.worker is not None:
@@ -1735,12 +2100,17 @@ class MainWindow(QMainWindow):
             self._open_settings()
             self._update_quick_profile_summary()
             return
-        settings = default_performance_settings() if preset == "system" else {
-            **default_performance_settings(), **settings_for_preset(preset),
-            "preset": preset, "auto_system_profile": False,
+        # Resource presets must preserve explicit frame density, audio bitrate
+        # and cache selection, so changing load cannot change match results.
+        settings = {
+            **self.performance_settings,
+            "preset": preset, "auto_system_profile": preset == "system",
+            "hardware_accel": "auto",
         }
+        changed_decoder = self.performance_settings["hardware_accel"] != "auto"
         self.performance_settings = normalize_performance_settings(settings)
-        self.alignments.clear()
+        if changed_decoder:
+            self.alignments.clear()
         self._apply_performance_settings()
         self._save_settings()
         self._refresh_track_actions()
@@ -1757,17 +2127,19 @@ class MainWindow(QMainWindow):
             self.profile_quick_combo.blockSignals(False)
         specs = system_specs()
         self.profile_quick_summary.setText(
+            f"{specs['cpu_model']}\n"
             f"{specs['physical_cores']} Kerne / {specs['logical_cpus']} Threads verfügbar · "
-            f"{specs['ram_gib']:.0f} GiB RAM · "
+            f"{specs['ram_gib']:.1f} GiB RAM · "
             f"Profil nutzt {cfg['cpu_threads']} CPU-Threads, "
-            f"{cfg['max_samples']} Bildproben je Video, "
-            f"{cfg['probe_workers']} Metadaten-Worker."
+            f"{cfg['probe_workers']} Metadaten-Worker, "
+            f"bis zu {cfg['sampling_workers']} Video-Decoder.\n"
+            f"GPU-Auto: {auto_decoder_summary()}"
         )
         desc = {
-            "fast": "LEICHT · Geringere Systemlast und weniger NAS-Zugriffe. Besonders geeignet neben Spielen.",
-            "balanced": "AUSGEWOGEN · Gute Erkennungsqualität bei moderater Belastung. Für alltägliche Stapel.",
-            "quality": "STARK · Höhere Bildprobendichte und mehr CPU-Leistung. Kann deutlich länger dauern; prüft schwierige Folgen gründlicher.",
-            "system": "AUTO · Wählt anhand verfügbarer CPU-Kerne und des RAM-Limits ein geeignetes Profil.",
+            "fast": "LEICHT · Kleine Ressourcenreserve, geeignet während du andere Programme benutzt.",
+            "balanced": "MITTEL · Nutzt etwa die Hälfte der verfügbaren CPU-Threads. Für den Alltag.",
+            "quality": "STARK · Nutzt nahezu alle CPU-Threads und mehr lokale Parallelität. Die Analyse bleibt identisch.",
+            "system": f"AUTO · Empfohlen: {PROFILE_LABELS[recommended_profile(specs)]}. Berechnet die Ressourcenwerte für dieses Gerät neu.",
             "custom": "EIGENE EINSTELLUNGEN · Manuell angepasst."
         }
         self.profile_tradeoff.setText(desc.get(cfg["preset"], desc["system"]))
@@ -1790,6 +2162,10 @@ class MainWindow(QMainWindow):
         history_action = QAction("Job-Verlauf…", self)
         history_action.triggered.connect(self._show_job_history)
         project.addAction(history_action)
+        queue_action = QAction("Stapel-Warteschlange…", self)
+        queue_action.setShortcut("Ctrl+Shift+J")
+        queue_action.triggered.connect(self._show_batch_queue)
+        project.addAction(queue_action)
         add_action = QAction("Medienordner hinzufügen…", self)
         add_action.setShortcut("Ctrl+O")
         add_action.triggered.connect(self.add_folder)
@@ -1816,6 +2192,11 @@ class MainWindow(QMainWindow):
         project.addAction(exit_action)
 
         edit_menu = self.menuBar().addMenu("Bearbeiten")
+        search_action = QAction("Episoden durchsuchen", self)
+        search_action.setShortcut("Ctrl+F")
+        search_action.triggered.connect(self._focus_episode_search)
+        edit_menu.addAction(search_action)
+        edit_menu.addSeparator()
         undo_action = QAction("Zeitkorrektur rückgängig", self)
         undo_action.setShortcut("Ctrl+Alt+Z")
         undo_action.triggered.connect(self._undo_selected_alignment)
@@ -1872,6 +2253,7 @@ class MainWindow(QMainWindow):
                 + f"\n\nProfil: {self.performance_settings['preset']}"
                 + f"\nOpenCV-CPU-Threads: {effective}"
                 + f"\nMetadaten-Worker: {self.performance_settings.get('probe_workers', 2)}"
+                + f"\nLokale Videodecoder (max.): {self.performance_settings['sampling_workers']}"
                 + f"\nVideo-Decoding: {self.performance_settings['hardware_accel']}"
                 + f"\nZusatz-Audio: AAC {self.performance_settings['audio_bitrate_kbps']} kbit/s"
             )
@@ -1879,6 +2261,7 @@ class MainWindow(QMainWindow):
             self._log(
                 f"Leistungseinstellungen aktiv: {self.performance_settings['preset']} · "
                 f"{effective} CPU-Threads · {self.performance_settings['max_samples']} Samples · "
+                f"max. {self.performance_settings['sampling_workers']} Video-Decoder · "
                 f"Decoder {self.performance_settings['hardware_accel']} · "
                 f"Zusatz-Audio {self.performance_settings['audio_bitrate_kbps']} kbit/s"
             )
@@ -2081,6 +2464,11 @@ class MainWindow(QMainWindow):
             "Unsichere Zeitabbildungen sollten vor dem Export geprüft werden."
         )
 
+    def _search_cleared(self, text: str):
+        if not text:
+            self.episode_filter_timer.stop()
+            self._filter_episodes()
+
     def _filter_episodes(self, *_args):
         if not hasattr(self, "episode_table"):
             return
@@ -2105,6 +2493,12 @@ class MainWindow(QMainWindow):
             self.episode_table.setRowHidden(index, not shown)
             if shown:
                 visible += 1
+        if hasattr(self, "episode_surface"):
+            self.episode_surface.setCurrentIndex(1 if visible else 0)
+            self.library_empty.setText(
+                "Keine passenden Episoden\nSuchbegriff löschen oder Filter auf Alle setzen."
+                if self.groups else "Noch keine Episoden\nFüge Quellen hinzu und wähle Bibliothek scannen."
+            )
         if self.groups:
             self.episode_count.setText(
                 f"{visible}/{len(self.groups)} Episoden angezeigt · "
@@ -2123,125 +2517,11 @@ class MainWindow(QMainWindow):
         sub.setWordWrap(True)
         layout.addWidget(label)
         layout.addWidget(sub)
+        box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         return box
 
     def _stylesheet(self) -> str:
-        base = """
-        QMainWindow, QWidget { background-color: #0b1423; color: #eaf1fb; font-family: Inter, "Noto Sans", sans-serif; font-size: 13px; }
-        QLabel { background: transparent; }
-        QMenuBar { background: #0e1a2b; color: #dce8f7; border-bottom: 1px solid #1f3450; padding: 4px 8px; }
-        QMenuBar::item { padding: 7px 11px; border-radius: 7px; background: transparent; }
-        QMenuBar::item:selected { background: #203a5c; }
-        QMenu { background: #111f33; border: 1px solid #2a4261; padding: 5px; }
-        QMenu::item { padding: 8px 22px; border-radius: 6px; }
-        QMenu::item:selected { background: #1d4f86; }
-        #brandLogo { background: transparent; border-radius: 15px; }
-        #dropHint { color: #9ab6d4; background: #0c1929; border: 1px dashed #385472; border-radius: 8px; padding: 7px 9px; font-size: 11px; }
-        QFrame#workflowStrip { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #15263d, stop:1 #101b2d); border: 1px solid #2c4361; border-radius: 13px; }
-        QFrame#workflowStrip:hover { border-color: #3b5d81; }
-        #workflowStep { color: #79c9ff; background: transparent; font-size: 10px; font-weight: 850; letter-spacing: 0.6px; }
-        QFrame#outputPanel { background: #101d30; border: 1px solid #2a405c; border-radius: 14px; }
-        #outputHeading { color: #cfe7ff; font-size: 11px; font-weight: 850; letter-spacing: 0.7px; }
-        #pathPreview { background: #0b1727; color: #95b4d5; border-left: 3px solid #4e9df1; border-radius: 5px; padding: 7px 9px; }
-        SourceDropList { selection-background-color: #1b4b7d; }
-        SourceDropList:focus { border-color: #70baff; }
-        QFrame#workflowStrip QPushButton { padding: 8px 10px; min-height: 21px; }
-        #brandTitle { color: #f4f8ff; font-size: 27px; font-weight: 750; letter-spacing: -0.7px; }
-        #sectionTitle { color: #eff6ff; font-size: 16px; font-weight: 680; }
-        #mutedText, #mutedText QLabel { color: #93a7c0; }
-        #statusChip { color: #b5f7d1; background: #102f30; border: 1px solid #225a57; border-radius: 11px; padding: 7px 12px; font-weight: 650; }
-        #panel { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #142238, stop:1 #101b2c); border: 1px solid #263b58; border-radius: 16px; }
-        #sourceRow { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #172940, stop:1 #111e31); border: 1px solid #2b405d; border-radius: 12px; }
-        #sourceName { color: #e7f1ff; font-weight: 660; }
-        QListWidget, QTableWidget, QScrollArea, #logView { background: #0d1828; border: 1px solid #263b58; border-radius: 11px; }
-        QListWidget { padding: 4px; }
-        QListWidget::item { padding: 9px 8px; border-radius: 7px; }
-        QListWidget::item:selected { background: #1b4b7d; color: #ffffff; }
-        QListWidget::item:hover:!selected { background: #192b42; }
-        QTableWidget { alternate-background-color: #112036; selection-background-color: #214f80; selection-color: white; gridline-color: transparent; }
-        QHeaderView::section { background: #162842; color: #a9bfd9; border: none; border-bottom: 1px solid #304968; padding: 10px 8px; font-weight: 650; }
-        QTableWidget::item { padding: 8px 7px; border-bottom: 1px solid #1d3049; }
-        QPushButton, QToolButton { color: #e8f1fd; background: #17283e; border: 1px solid #2f4665; border-radius: 9px; padding: 9px 13px; font-weight: 580; }
-        QPushButton:hover, QToolButton:hover { background: #203956; border-color: #41648a; }
-        QPushButton:pressed, QToolButton:pressed { background: #16304b; }
-        QPushButton:focus, QToolButton:focus, QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus { border: 1px solid #70baff; }
-        QPushButton:disabled { color: #6e8098; background: #111d2d; border-color: #24354c; }
-        #primaryButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2383ee, stop:1 #3863dd); border: 1px solid #559cff; color: white; font-weight: 700; }
-        #primaryButton:hover { background: #347ff1; border-color: #8bc0ff; }
-        #secondaryButton { background: #172f4b; border-color: #34577b; color: #d9eaff; }
-        #iconButton { padding: 4px 8px; min-width: 26px; max-width: 32px; font-weight: 700; }
-        QLineEdit, QComboBox, QDoubleSpinBox, QSpinBox { color: #ecf4ff; background: #0a1525; border: 1px solid #2d4361; border-radius: 8px; padding: 6px 8px; min-height: 22px; selection-background-color: #285e96; }
-        QComboBox QAbstractItemView { background: #14243a; color: #edf4ff; selection-background-color: #2a5e95; border: 1px solid #36516f; }
-        QCheckBox, QRadioButton { spacing: 8px; color: #dce8f7; }
-        QCheckBox::indicator, QRadioButton::indicator { width: 16px; height: 16px; }
-        QCheckBox::indicator { border: 1px solid #617b9c; border-radius: 4px; background: #0b1727; }
-        QCheckBox::indicator:checked { background: #2988ef; border-color: #83c2ff; }
-        QRadioButton::indicator { border: 1px solid #617b9c; border-radius: 8px; background: #0b1727; }
-        QRadioButton::indicator:checked { background: #45a5ff; border: 4px solid #132a45; }
-        QProgressBar { border: 1px solid #2b4260; background: #0d1a2b; color: #dce9fa; border-radius: 7px; min-height: 18px; text-align: center; }
-        QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2385f5, stop:1 #3b6de6); border-radius: 6px; }
-        QFrame#analysisInsight { background: #112c45; border: 1px solid #39668d; border-left: 4px solid #63bbff; border-radius: 10px; }
-        QFrame#analysisInsight[state="safe"] { background: #102c2b; border-color: #28695e; border-left: 4px solid #57db9f; }
-        QFrame#analysisInsight[state="unsafe"], QFrame#analysisInsight[state="cancelled"] { background: #332718; border-color: #685236; border-left: 4px solid #ffc46b; }
-        QFrame#analysisInsight[state="error"] { background: #331f2b; border-color: #7e4555; border-left: 4px solid #fb889d; }
-        #insightTitle { color: #f4f8ff; font-size: 14px; font-weight: 750; }
-        #insightText { color: #bfd2e8; }
-        #insightDismiss { min-width: 24px; max-width: 29px; padding: 4px; font-size: 17px; }
-        #cancelButton:enabled { background: #3d2533; border-color: #775066; color: #ffe0e6; }
-        #cancelButton:enabled:hover { background: #5b3045; border-color: #d47e94; }
-        #progressDetail { color: #8faac9; font-size: 11px; padding: 0px 4px 2px 4px; }
-        QTabWidget::pane { background: #101c2e; border: 1px solid #304563; border-radius: 8px; padding: 3px; }
-        QTabBar::tab { color: #a8bfda; background: #15243b; border: 1px solid #2b4160; border-bottom: none; padding: 9px 16px; margin-right: 3px; border-top-left-radius: 8px; border-top-right-radius: 8px; }
-        QTabBar::tab:selected { color: #ffffff; background: #244976; border-color: #4c78a8; }
-        QTabBar::tab:hover:!selected { background: #203552; }
-        #statusGood { color: #5ee5a3; font-weight: 650; }
-        #statusWarn { color: #ffd27d; font-weight: 650; }
-        #statusMuted { color: #92a6bf; }
-        #alignmentResidualPlot { border-radius: 9px; }
-        #logView { padding: 8px; color: #b6c8df; font-family: "Noto Sans Mono", monospace; font-size: 11px; }
-        QScrollBar:vertical { background: #0b1726; width: 12px; margin: 2px; border-radius: 6px; }
-        QScrollBar::handle:vertical { background: #344b69; border-radius: 5px; min-height: 28px; }
-        QScrollBar::handle:vertical:hover { background: #4a678c; }
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
-        QScrollBar:horizontal { background: #0b1726; height: 12px; margin: 2px; }
-        QScrollBar::handle:horizontal { background: #344b69; border-radius: 5px; min-width: 28px; }
-        QStatusBar { color: #91a6c0; background: #0a1321; border-top: 1px solid #1d3049; }
-        QSplitter::handle { background: #233851; width: 4px; }
-        QToolTip { background: #14243a; color: #f1f6ff; border: 1px solid #405b7b; padding: 5px 7px; }
-        """
-        base += """
-        /* DubSync Studio 1.5.14 · workstation layout */
-        QMainWindow, QWidget { background-color: #0d1018; color: #e6eaf2; }
-        QMenuBar, QStatusBar { background-color: #0b0e14; border-color: #292f3d; }
-        QFrame#sidebar { background-color: #141923; border: 1px solid #29313f; border-radius: 16px; }
-        QFrame#jobDock { background-color: #151b27; border: 1px solid #303b4e; border-radius: 13px; }
-        QFrame#heroCard { background-color: #17273b; border: 1px solid #395579; border-radius: 16px; }
-        QFrame#pageHeader { background: transparent; border: none; }
-        #eyebrow { color: #83a8d0; font-size: 11px; font-weight: 800; letter-spacing: 0.6px; }
-        #pageTitle { color: #f5f7ff; font-size: 26px; font-weight: 800; }
-        #heroNumber { color: #ffffff; font-size: 23px; font-weight: 750; }
-        #navFootnote { color: #80a1c3; background: #111c2d; border-radius: 9px; padding: 13px; }
-        QPushButton#navButton { background: transparent; text-align: left; border: 1px solid transparent; border-radius: 10px; padding: 10px 14px; font-size: 13px; }
-        QPushButton#navButton:hover { background: #233149; }
-        QPushButton#navButton:checked { background: #243f60; border-color: #4474a9; color: #ecf6ff; }
-        QFrame#workflowStrip, QFrame#outputPanel, QFrame#panel { background: #171d2a; border-color: #323b4d; }
-        QFrame#workflowStrip:hover { border-color: #557198; }
-        QListWidget, QTableWidget, QScrollArea, QTextEdit#logView { background: #121824; border-color: #303b4e; }
-        QHeaderView::section { background: #202b3b; color: #b7c8dc; border-color: #334057; }
-        QPushButton#primaryButton { background: #377ad6; border-color: #74a5ea; color: #ffffff; }
-        QPushButton#primaryButton:hover { background: #4389e8; }
-        #statusChip { background: #172e36; color: #a8e5d0; border-color: #355866; }
-        #mutedText { color: #a8b6ca; }
-        """
-        if self.settings.get("high_contrast", False):
-            base += """
-            QWidget { color: #ffffff; }
-            #mutedText, #mutedText QLabel { color: #e5eefb; }
-            #panel, #sourceRow, QListWidget, QTableWidget, QScrollArea { border: 2px solid #7594b9; }
-            QPushButton, QToolButton, QLineEdit, QComboBox, QDoubleSpinBox, QSpinBox { border: 2px solid #8eadd2; }
-            #statusGood { color: #7dffb1; } #statusWarn { color: #ffe59b; }
-            """
-        return base
+        return studio_stylesheet(self.settings.get("high_contrast", False))
 
     def _update_tool_status(self):
         try:
@@ -2507,6 +2787,7 @@ class MainWindow(QMainWindow):
             "performance": dict(self.performance_settings),
             "track_overrides": self.track_overrides,
             "master_overrides": self.master_overrides,
+            "manual_segments": list(self.manual_segment_overrides.values()),
         }
 
     def _save_project(self) -> bool:
@@ -2616,10 +2897,15 @@ class MainWindow(QMainWindow):
             self.performance_settings["cache_enabled"] = False
             self.track_overrides = dict(data.get("track_overrides", {}))
             self.master_overrides = dict(data.get("master_overrides", {}))
+            self.manual_segment_overrides = {
+                (record["master"], record["source"]): record
+                for record in data.get("manual_segments", [])
+            }
             if self._track_override_timer.isActive():
                 self._track_override_timer.stop()
             self.media_cache.clear()
             self.alignments.clear()
+            self.automatic_alignments.clear()
             self.groups.clear()
             self.selected_group = None
             self.selected_master = None
@@ -2630,6 +2916,7 @@ class MainWindow(QMainWindow):
             self.output_dir_edit.setText(self.output_directory)
             self.organize_output_check.setChecked(self.organize_output)
             self.skip_existing_check.setChecked(False)
+            self._clear_resume_journal()
             self._refresh_roots()
             self._apply_performance_settings(log_change=False)
             self._save_settings()
@@ -2672,6 +2959,98 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Job-Verlauf", "Es wurden noch keine Aufgaben protokolliert.")
             return
         JobHistoryDialog(entries, self).exec()
+
+    def _show_batch_queue(self):
+        if self.batch_queue is None:
+            QMessageBox.warning(self, "Warteschlange nicht verfügbar",
+                                "Die lokale Warteschlange konnte nicht geöffnet werden. Prüfe das Diagnoseprotokoll.")
+            return
+        try:
+            while True:
+                dialog = BatchQueueDialog(self.batch_queue.recent(),
+                                          busy=self.worker is not None, parent=self)
+                if dialog.exec() != QDialog.DialogCode.Accepted or not dialog.action:
+                    return
+                action, selected = dialog.action, dialog.job_id
+                if action == "retry" and selected:
+                    created = self.batch_queue.retry_problematic(selected)
+                    self._log(f"Problematische Episoden als neuen Auftrag eingeplant ({created[:8]}).")
+                    continue
+                if action == "drain":
+                    self._queue_drain_active = True
+                    self._run_next_queued_batch()
+                    return
+                if action == "start" and selected:
+                    self._queue_drain_active = False
+                    self._start_queued_batch(selected)
+                    return
+        except (QueueError, OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Warteschlange", str(exc))
+        finally:
+            self._refresh_inline_queue()
+
+    def _start_queued_batch(self, job_id: str, *, authorized_for_current_session: bool = False) -> bool:
+        if self.worker is not None or self.batch_queue is None:
+            self.statusBar().showMessage("Eine Aufgabe läuft bereits.", 5000)
+            return False
+        try:
+            entry = self.batch_queue.get(job_id)
+            if entry["state"] not in BatchQueueDialog.STARTABLE:
+                raise QueueError("Dieser Auftrag kann aktuell nicht gestartet werden.")
+        except QueueError as exc:
+            QMessageBox.warning(self, "Warteschlange", str(exc))
+            return False
+        if (not authorized_for_current_session and not entry["journal_path"]
+                and entry["spec"]["options"].get("overwrite_existing")):
+            answer = QMessageBox.warning(
+                self, "Überschreiben erneut bestätigen",
+                "Dieser gespeicherte Auftrag wurde mit Überschreibberechtigung angelegt. "
+                "Vorhandene Zieldateien könnten ersetzt werden. Quelldateien bleiben unverändert.\n\n"
+                "Diesen Auftrag jetzt mit Überschreibberechtigung starten?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return False
+        if self._prewarm_worker is not None and self._prewarm_worker.isRunning():
+            self._prewarm_worker.cancel(reason="batch_priority")
+        self._active_queue_job_id = job_id
+        self._log(f"Gespeicherten Stapel starten: {entry['label']} ({job_id[:8]}).")
+        self._run_task(
+            f"Serien-Stapel: {entry['label']}",
+            lambda report, cancel: self.batch_queue.run(
+                job_id, cache=self.cache, cancel_event=cancel,
+                progress=lambda current, total, message: report(message, current, total),
+            ),
+            self._batch_done,
+        )
+        return True
+
+    def _run_next_queued_batch(self):
+        if not self._queue_drain_active or self.batch_queue is None or self.worker is not None:
+            return
+        try:
+            waiting = [entry for entry in reversed(self.batch_queue.recent(200))
+                       if entry["state"] == "queued"]
+        except (QueueError, OSError, ValueError) as exc:
+            self._queue_drain_active = False
+            QMessageBox.warning(self, "Warteschlange", str(exc))
+            return
+        if waiting:
+            if not self._start_queued_batch(waiting[0]["id"]):
+                self._queue_drain_active = False
+        else:
+            self._queue_drain_active = False
+            self.statusBar().showMessage("Warteschlange abgearbeitet", 5000)
+
+    def _finish_queued_task(self, *, interrupted: bool = False):
+        was_queued = self._active_queue_job_id is not None
+        self._active_queue_job_id = None
+        if interrupted:
+            self._queue_drain_active = False
+        if was_queued and self._queue_drain_active:
+            QTimer.singleShot(0, self._run_next_queued_batch)
+        self._refresh_inline_queue()
 
     def _show_batch_diagnostic(self):
         """Explore complete batch runs, not just the last cancelled alignment."""
@@ -3114,12 +3493,13 @@ class MainWindow(QMainWindow):
                 if label and label != "UND":
                     languages.add(label)
             self.episode_table.setItem(row, 2, QTableWidgetItem(", ".join(sorted(languages)) if languages else "Zuordnung offen"))
-            status = "Bereit" if len(group.files) > 1 else "1 Datei · prüfen"
+            status = "Abgleich offen" if len(group.files) > 1 else "Fassung fehlt"
             self.episode_table.setItem(row, 3, QTableWidgetItem(status))
         self.episode_search.clear()
         self.episode_filter.setCurrentIndex(0)
         self.episode_count.setText(f"{len(groups)} Gruppen · {sum(g.count for g in groups)} Videodateien")
         self._filter_episodes()
+        self.sources_toggle.setChecked(False)
         self._log(f"Scan abgeschlossen: {len(groups)} Episodengruppen aus {sum(g.count for g in groups)} Dateien.")
         if groups:
             self.episode_table.selectRow(0)
@@ -3132,6 +3512,7 @@ class MainWindow(QMainWindow):
     def _on_episode_selected(self):
         row = self.episode_table.currentRow()
         if row < 0 or row >= len(self.groups):
+            self.review_panel.reset()
             return
         # Table rows and groups use the same deterministic sorted order.
         group = self.groups[row]
@@ -3195,6 +3576,7 @@ class MainWindow(QMainWindow):
             self._render_group(group)
 
     def _show_probe_loading(self, group: EpisodeGroup):
+        self.review_panel.reset(f"{group.display_name} · Metadaten werden geladen")
         self.detail_heading.setText(group.display_name)
         self.detail_description.setText(f"{group.count} Dateien · Metadaten und Audiospuren werden geladen …")
         self._clear_detail("Analysiere Dateiformate und Audiospuren …")
@@ -3315,10 +3697,13 @@ class MainWindow(QMainWindow):
                     row.include_audio.setChecked(override["include"])
             radios.addButton(row.master_radio)
             row.masterToggled.connect(self._master_changed)
+            row.segmentEditRequested.connect(self._edit_segments)
+            row.resetSegmentRequested.connect(self._reset_manual_segments)
             self.detail_layout.addWidget(row)
             self.source_rows[path] = row
-            cached = None
-            if self.performance_settings.get("cache_enabled", True):
+            key = (self.selected_master or "", path)
+            cached = self.alignments.get(key)
+            if cached is None and self.performance_settings.get("cache_enabled", True):
                 cached = self.cache.get(
                     path, self.selected_master or path,
                     interval=self.performance_settings["sample_interval"],
@@ -3326,7 +3711,10 @@ class MainWindow(QMainWindow):
                     hardware_accel=self.performance_settings["hardware_accel"],
                 )
             if cached and path != self.selected_master:
-                self.alignments[(self.selected_master or "", path)] = cached
+                if not cached.manual_segments:
+                    self.automatic_alignments[key] = cached
+                    cached = self._restore_manual_segments(cached)
+                self.alignments[key] = cached
                 row.set_alignment(cached)
             # Saved manual corrections survive cached or newly recomputed analysis.
             if override.get("manual_alignment") and ("offset" in override or "scale" in override):
@@ -3350,6 +3738,8 @@ class MainWindow(QMainWindow):
 
         self.detail_layout.addStretch(1)
         self._refresh_track_actions()
+        self.review_panel.show_group(group, self.selected_master, self.media_cache,
+                                     self._review_alignments())
 
     def _on_track_changed(self, path: str):
         row = self.source_rows.get(path)
@@ -3370,6 +3760,7 @@ class MainWindow(QMainWindow):
         self._mark_project_dirty()
         self._track_override_timer.start()
         self._refresh_track_actions()
+        self.review_panel.refresh(self._review_alignments())
 
     def _persist_track_overrides(self):
         self._save_settings()
@@ -3422,7 +3813,8 @@ class MainWindow(QMainWindow):
         for row in self.source_rows.values():
             row.set_master_choice(path)
             if row.path != path:
-                cached = self.alignments.get((path, row.path))
+                key = (path, row.path)
+                cached = self.alignments.get(key)
                 if cached is None and self.performance_settings.get("cache_enabled", True):
                     cached = self.cache.get(
                         row.path, path,
@@ -3431,7 +3823,10 @@ class MainWindow(QMainWindow):
                         hardware_accel=self.performance_settings["hardware_accel"],
                     )
                 if cached:
-                    self.alignments[(path, row.path)] = cached
+                    if not cached.manual_segments:
+                        self.automatic_alignments[key] = cached
+                        cached = self._restore_manual_segments(cached)
+                    self.alignments[key] = cached
                     row.set_alignment(cached)
                 else:
                     row.status_label.setText("Noch nicht mit diesem Referenzvideo analysiert")
@@ -3439,6 +3834,8 @@ class MainWindow(QMainWindow):
                     row.status_label.style().unpolish(row.status_label)
                     row.status_label.style().polish(row.status_label)
         self._refresh_track_actions()
+        self.review_panel.show_group(self.selected_group, self.selected_master,
+                                     self.media_cache, self._review_alignments())
 
     def _active_track_rows(self) -> list[SourceRow]:
         return [row for path, row in self.source_rows.items() if path != self.selected_master and row.is_included()]
@@ -3466,6 +3863,114 @@ class MainWindow(QMainWindow):
             if row.path != self.selected_master and row.is_included():
                 return row
         return None
+
+    @staticmethod
+    def _media_pair_signature(master: str, source: str) -> dict[str, int] | None:
+        try:
+            source_stat = Path(source).stat()
+            master_stat = Path(master).stat()
+        except OSError:
+            return None
+        return {
+            "source_size": source_stat.st_size,
+            "source_mtime_ns": source_stat.st_mtime_ns,
+            "master_size": master_stat.st_size,
+            "master_mtime_ns": master_stat.st_mtime_ns,
+        }
+
+    def _restore_manual_segments(self, original: AlignmentResult) -> AlignmentResult:
+        """Never reuse an edit for files whose identity or duration has changed."""
+        key = (original.target_path, original.source_path)
+        record = self.manual_segment_overrides.get(key)
+        if record is None:
+            return original
+        signature = self._media_pair_signature(*key)
+        if signature is None or any(record.get(name) != value for name, value in signature.items()):
+            self._log(f"Manuelle Schnittbereiche verworfen (Datei verändert): {Path(key[1]).name}")
+            self.manual_segment_overrides.pop(key, None)
+            self._mark_project_dirty()
+            return original
+        try:
+            segments = [TimelineSegment(
+                source_start=record_item["source_start"],
+                source_end=record_item["source_end"],
+                target_start=record_item["target_start"],
+                target_end=record_item["target_end"],
+                anchor_count=0, median_hamming=99.0, rms_error=99.0,
+                distinct_hashes=0, enabled=record_item["enabled"],
+            ) for record_item in record["segments"]]
+            problem = validate_timeline_layout(segments, original.source_duration,
+                                               original.target_duration)
+            if problem:
+                raise ValueError(problem)
+        except (KeyError, ValueError, TypeError) as exc:
+            self._log(f"Manuelle Schnittbereiche nicht übernommen: {exc}")
+            self.manual_segment_overrides.pop(key, None)
+            self._mark_project_dirty()
+            return original
+        return replace(original, segments=segments, manual_segments=True, warnings=[
+            *original.warnings,
+            "Manuelle Abschnittszuordnung aus dem Projekt geladen; Exportfreigabe erforderlich.",
+        ])
+
+    def _reset_manual_segments(self, path: str):
+        if not self.selected_master:
+            return
+        key = (self.selected_master, path)
+        original = self.automatic_alignments.get(key)
+        row = self.source_rows.get(path)
+        if original is None or row is None:
+            QMessageBox.information(self, "Automatische Zuordnung fehlt",
+                                    "Analysiere diese Quelle erneut, um die ursprünglichen Abschnitte wiederherzustellen.")
+            return
+        self.manual_segment_overrides.pop(key, None)
+        self.alignments[key] = original
+        row.set_alignment(original)
+        self._on_track_changed(path)
+        self._log(f"Automatische Schnittbereiche wiederhergestellt: {Path(path).name}")
+
+    def _edit_segments(self, path: str):
+        """Manual sections stay unsafe until the user approves the export."""
+        if self.worker is not None or not self.selected_master or path == self.selected_master:
+            return
+        row = self.source_rows.get(path)
+        original = self.alignments.get((self.selected_master, path))
+        if row is None or original is None:
+            QMessageBox.information(self, "Analyse erforderlich",
+                                    "Analysiere die Quelle zuerst gegen das aktuelle Bildmaster.")
+            return
+        baseline = original
+        if row.manual_alignment:
+            baseline = replace(original, slope=row.scale_spin.value(),
+                               offset=row.offset_spin.value(), segments=[], manual_segments=True)
+        dialog = SegmentEditorDialog(baseline, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        updated = replace(
+            baseline, segments=list(dialog.segments), manual_segments=True,
+            warnings=list(dict.fromkeys([
+                *baseline.warnings,
+                "Schnittbereiche wurden manuell verändert; Export erfordert ausdrückliche Freigabe.",
+            ])),
+        )
+        self.alignments[(self.selected_master, path)] = updated
+        signature = self._media_pair_signature(self.selected_master, path)
+        if signature is not None:
+            self.manual_segment_overrides[(self.selected_master, path)] = {
+                "master": self.selected_master,
+                "source": path,
+                **signature,
+                "segments": [
+                    {name: getattr(item, name) for name in (
+                        "source_start", "source_end", "target_start", "target_end", "enabled"
+                    )} for item in updated.segments
+                ],
+            }
+        row.set_alignment(updated)
+        self._on_track_changed(path)
+        self._log(f"Manuelle Schnittbereiche übernommen: {Path(path).name} · "
+                  f"{len(updated.segments)} Abschnitte, "
+                  f"{sum(item.enabled for item in updated.segments)} aktiv")
 
     def _undo_selected_alignment(self):
         row = self._selected_alignment_row()
@@ -3507,6 +4012,8 @@ class MainWindow(QMainWindow):
                 "label": f"{title} · {Path(path).name}" + (" (Master)" if is_master else ""),
                 "offset": 0.0 if is_master else float(row.offset_spin.value()),
                 "scale": 1.0 if is_master else float(row.scale_spin.value()),
+                "segments": (list(alignment.segments) if alignment and not row.manual_alignment
+                             else []),
                 "duration": float(row.info.duration),
                 "master": is_master,
                 "language": row.language_edit.text().strip() or "und",
@@ -3535,9 +4042,23 @@ class MainWindow(QMainWindow):
         if not path or stream_index < 0 or not (0.5 <= scale <= 2.0):
             QMessageBox.warning(self, "Ungültige Hörprobe", "Die ausgewählte Audiospur oder Zeitkorrektur ist ungültig.")
             return
-        source_time = target_time if request.get("master") else (target_time - offset) / scale
+        segments = request.get("segments") or []
+        if segments and not request.get("master"):
+            piece = next((item for item in segments
+                          if item.enabled and item.target_start <= target_time < item.target_end), None)
+            if piece is None:
+                QMessageBox.information(self, "Keine Audioabdeckung",
+                                        "Dieser Abschnitt des Bildmasters hat keine bestätigte passende Audioszene. "
+                                        "Wähle einen Zeitpunkt innerhalb eines bestätigten Abschnitts.")
+                return
+            source_time = piece.source_time_for_target(target_time)
+            if source_time is None:
+                return
+            duration = min(duration, piece.source_end - source_time)
+        else:
+            source_time = target_time if request.get("master") else (target_time - offset) / scale
         source_duration = float(request.get("duration", 0.0))
-        if source_time < 0 or source_time + 0.5 >= source_duration:
+        if source_time < 0 or source_time + 0.3 >= source_duration or duration < 0.3:
             QMessageBox.information(
                 self, "Keine Audioabdeckung",
                 f"Die Referenzzeit {target_time:.2f} s liegt für diese Spur außerhalb der verfügbaren Quellzeit (berechnet: {source_time:.2f} s). Wähle einen anderen Zeitpunkt."
@@ -3660,6 +4181,8 @@ class MainWindow(QMainWindow):
                     progress=subprogress, cancel_event=cancel_event,
                     max_samples=options["max_samples"],
                     hardware_accel=options["hardware_accel"],
+                    frame_cache_enabled=bool(options["frame_cache_enabled"]),
+                    sampling_workers=int(options["sampling_workers"]),
                     source_info=probed_snapshot.get(str(Path(source).resolve())),
                     target_info=master_info,
                 )
@@ -3670,6 +4193,8 @@ class MainWindow(QMainWindow):
 
     def _analysis_done(self, results: list[AlignmentResult]):
         for result in results:
+            self.automatic_alignments[(result.target_path, result.source_path)] = result
+            result = self._restore_manual_segments(result)
             self.alignments[(result.target_path, result.source_path)] = result
             row = self.source_rows.get(result.source_path)
             if row:
@@ -3708,6 +4233,8 @@ class MainWindow(QMainWindow):
                 "Synchronisation analysiert", f"{len(results)} Audiospur(en) erfolgreich geprüft. "
                 "Kontrolliere den Versatz mit der Hörprobe vor dem Export.", "safe")
         self._refresh_track_actions()
+        if self.selected_group:
+            self.review_panel.refresh(self._review_alignments())
 
     @staticmethod
     def _format_alignment(result: AlignmentResult) -> str:
@@ -3760,8 +4287,6 @@ class MainWindow(QMainWindow):
         root_rules = dict(self.root_languages)
         roots = list(self.roots)
         organize = self.organize_output_check.isChecked()
-        # Do not let FFprobe metadata from an earlier scan influence this batch.
-        fresh_media_cache: dict[str, MediaInfo] = {}
         # Keep verified single-episode results visible if the confirmation is
         # cancelled. The batch aligner still deliberately recalculates each pair.
         mapping_preview = "\n".join(
@@ -3771,21 +4296,31 @@ class MainWindow(QMainWindow):
         if len(candidates) > 5:
             mapping_preview += f"\n  … weitere {len(candidates) - 5} Gruppen"
         answer = QMessageBox.question(
-            self, "Serien-Stapel starten",
+            self, "Serien-Stapel einplanen",
             f"Es werden {len(candidates)} Episodengruppen automatisch verarbeitet.\n\n"
             "Die Stapelposition (z. B. 1/13) ist NICHT die Episodennummer.\n"
             "Vorschau der Dateizuordnung:\n" + mapping_preview + "\n\n"
-            "Nur zuverlässig ausgerichtete Gruppen werden exportiert; unsichere Synchronisationen werden übersprungen.\n\n"
+            "Nur zuverlässig ausgerichtete Gruppen werden exportiert. Episoden mit manuellen "
+            "Schnittbereichen werden übersprungen und müssen einzeln bestätigt werden.\n\n"
             f"Beispiel-Ausgabe:\n{preview}\n\n"
             f"Ordnerstruktur: {'Serie / Staffel' if organize else 'ein Ausgabeordner'}\n"
             f"Tracknamen-Regeln: {len(root_rules)}\n"
             "Bildmaster: automatisch kleinste Videodatei je Episode (Laufzeit/Auflösung folgen dieser Datei)\n"
             f"Zusatz-Audio: AAC {self.performance_settings['audio_bitrate_kbps']} kbit/s\n"
-            f"Bereits fertig überspringen: {'Ja' if skip_existing else 'Nein'}\n\nJetzt starten?",
-            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
+            f"Bereits fertig überspringen: {'Ja' if skip_existing else 'Nein'}\n"
+            f"Sichere Fortsetzung: {Path(self._resume_journal_path).name if self._resume_journal_path else 'Nein'}\n\n"
+            "Ein Stapelprotokoll verifiziert nur bereits abgeschlossene MKVs. "
+            "Ungeprüfte Dateien werden niemals stillschweigend ersetzt.\n\n"
+            "Ja: einplanen und jetzt starten. Nein: nur dauerhaft einplanen.",
+            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Cancel,
         )
-        if answer != QMessageBox.StandardButton.Yes:
+        if answer == QMessageBox.StandardButton.Cancel:
+            return
+        if self.batch_queue is None:
+            QMessageBox.critical(self, "Warteschlange nicht verfügbar",
+                                 "Der Serien-Stapel kann nicht dauerhaft gespeichert werden. "
+                                 "Prüfe die Diagnose, bevor du erneut startest.")
             return
         self._save_settings()
         # Immediately after a scan, metadata prewarming can still be querying the
@@ -3801,32 +4336,63 @@ class MainWindow(QMainWindow):
                 f"| Staffel={group.season_number} Folge={group.episode_number} "
                 f"| {', '.join(Path(path).name for path in group.files)}"
             )
-        self._run_task(
-            f"Serien-Stapel: {len(groups)} Gruppen …",
-            lambda report, cancel: batch_export_groups(
-                groups, str(output_path), cache=self.cache,
-                progress=lambda current, total, message: report(message, current, total),
-                cancel_event=cancel,
-                roots=roots,
-                root_languages=root_rules,
-                organize_by_series=organize,
-                skip_existing=skip_existing,
-                overwrite_existing=overwrite_existing,
-                media_cache=fresh_media_cache,
-                track_overrides=dict(self.track_overrides),
-                master_overrides=dict(self.master_overrides),
-                alignment_options={
-                    "interval": self.performance_settings["sample_interval"],
-                    "max_samples": self.performance_settings["max_samples"],
-                    "hardware_accel": self.performance_settings["hardware_accel"],
-                    "cache_enabled": False,
-                    "audio_bitrate_kbps": self.performance_settings["audio_bitrate_kbps"],
-                },
-            ),
-            self._batch_done,
+        options = {
+            "roots": roots,
+            "root_languages": root_rules,
+            "organize_by_series": organize,
+            "skip_existing": skip_existing,
+            "overwrite_existing": overwrite_existing,
+            "track_overrides": dict(self.track_overrides),
+            "master_overrides": dict(self.master_overrides),
+            "manual_section_sources": sorted({source for _, source in self.manual_segment_overrides}),
+            "alignment_options": {
+                "interval": self.performance_settings["sample_interval"],
+                "max_samples": self.performance_settings["max_samples"],
+                "hardware_accel": self.performance_settings["hardware_accel"],
+                "cache_enabled": False,
+                "frame_cache_enabled": self.performance_settings["frame_cache_enabled"],
+                "sampling_workers": self.performance_settings["sampling_workers"],
+                "audio_bitrate_kbps": self.performance_settings["audio_bitrate_kbps"],
+            },
+        }
+        try:
+            job_id = self.batch_queue.enqueue(
+                groups, str(output_path), label=f"{len(groups)} Episoden · {groups[0].series_name or 'Serie'}",
+                options=options, initial_resume_journal=self._resume_journal_path,
+            )
+        except (QueueError, OSError, ValueError) as exc:
+            QMessageBox.critical(self, "Stapel konnte nicht gespeichert werden", str(exc))
+            return
+        self._log(f"Serien-Stapel dauerhaft eingeplant ({job_id[:8]}).")
+        self._clear_resume_journal()
+        if answer == QMessageBox.StandardButton.Yes:
+            self._queue_drain_active = False
+            self._start_queued_batch(job_id, authorized_for_current_session=True)
+        else:
+            self.statusBar().showMessage("Stapel eingeplant · Warteschlange über Strg+Umschalt+J öffnen", 7000)
+
+    def _choose_resume_journal(self):
+        """Selection is explicit and report compatibility is checked by the core."""
+        initial_directory = str(batch_diagnostics_directory())
+        selected, _ = QFileDialog.getOpenFileName(
+            self, "Früheres Stapelprotokoll zum sicheren Fortsetzen wählen",
+            initial_directory, "Stapelprotokoll (batch-*.json);;JSON (*.json)",
         )
+        if selected:
+            self._resume_journal_path = selected
+            self.resume_batch_hint.setText(
+                f"Fortsetzen mit {Path(selected).name}: Nur identische Quellen, "
+                "Einstellungen und intakte MKVs werden als fertig anerkannt."
+            )
+            self.resume_batch_button.setText("Protokoll ändern …")
+
+    def _clear_resume_journal(self):
+        self._resume_journal_path = None
+        self.resume_batch_hint.setText("Fortsetzen: kein Stapelprotokoll ausgewählt")
+        self.resume_batch_button.setText("Stapel fortsetzen …")
 
     def _batch_done(self, result: dict[str, list[str]]):
+        self._clear_resume_journal()
         stopped = bool(result.get("cancelled"))
         self._log(
             f"Serien-Stapel {'abgebrochen' if stopped else 'beendet'}: {len(result['exported'])} exportiert, "
@@ -3881,20 +4447,24 @@ class MainWindow(QMainWindow):
         tracks: list[TrackChoice] = []
         for row in rows:
             result = self.alignments[(self.selected_master, row.path)]
-            # Manuelle Offset-/Scale-Änderungen müssen gegen die Zeitanker neu geprüft werden.
-            chosen_offset = row.offset_spin.value()
-            chosen_slope = row.scale_spin.value()
-            residuals = [a.target_time - (chosen_slope * a.source_time + chosen_offset)
-                         for a in result.anchors]
-            threshold = max(0.75, result.sample_interval * 1.20)
-            inliers = [abs(value) <= threshold for value in residuals]
-            if residuals:
-                rms = (sum(value * value for value in residuals) / len(residuals)) ** 0.5
-                inlier_ratio = sum(inliers) / len(inliers)
-                result = replace(result, offset=chosen_offset, slope=chosen_slope,
-                                 rms_error=rms, inlier_ratio=inlier_ratio)
-            else:
-                result = replace(result, offset=chosen_offset, slope=chosen_slope)
+            # Never reinterpret confirmed piecewise cuts as a global affine fit
+            # merely because the spin boxes round their display values.
+            if row.manual_alignment:
+                chosen_offset = row.offset_spin.value()
+                chosen_slope = row.scale_spin.value()
+                residuals = [a.target_time - (chosen_slope * a.source_time + chosen_offset)
+                             for a in result.anchors]
+                threshold = max(0.75, result.sample_interval * 1.20)
+                inliers = [abs(value) <= threshold for value in residuals]
+                if residuals:
+                    rms = (sum(value * value for value in residuals) / len(residuals)) ** 0.5
+                    inlier_ratio = sum(inliers) / len(inliers)
+                    result = replace(result, offset=chosen_offset, slope=chosen_slope,
+                                     rms_error=rms, inlier_ratio=inlier_ratio,
+                                     segments=[], manual_segments=False)
+                else:
+                    result = replace(result, offset=chosen_offset, slope=chosen_slope,
+                                     segments=[], manual_segments=False)
             tracks.append(TrackChoice(
                 path=row.path, audio_ordinal=row.audio_ordinal,
                 language=row.language_edit.text().strip() or "und",
@@ -3906,12 +4476,14 @@ class MainWindow(QMainWindow):
         allow_low = False
         if low:
             details = "\n".join(
-                f"• {Path(track.path).name}: " + " / ".join(track.alignment.warnings[:2])
+                f"• {Path(track.path).name}: " +
+                ("manuell bearbeitete Schnittbereiche; nicht visuell neu verifiziert"
+                 if track.alignment.manual_segments else " / ".join(track.alignment.warnings[:2]))
                 for track in low
             )
             reply = QMessageBox.warning(
                 self, "Synchronisation prüfen",
-                "Mindestens eine Audiospur hat eine unsichere oder nur lineare Zuordnung.\n\n"
+                "Mindestens eine Audiospur hat eine manuell bearbeitete oder unsichere Zuordnung.\n\n"
                 + details + "\n\nTrotzdem exportieren? Die Ausgabe kann in diesen Bereichen unsynchron sein.",
                 QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
                 QMessageBox.StandardButton.Cancel,
@@ -4047,11 +4619,21 @@ class MainWindow(QMainWindow):
             return
         if worker.pause_event.is_set():
             worker.resume()
+            if self._active_queue_job_id and self.batch_queue is not None:
+                try:
+                    self.batch_queue.pause(self._active_queue_job_id, False)
+                except Exception:
+                    self._logger.exception("Pausenstatus konnte nicht gespeichert werden")
             self.pause_button.setText("Pause")
             self.activity_label.setText("Wird fortgesetzt …")
             self.statusBar().showMessage("Verarbeitung fortgesetzt", 3000)
         else:
             worker.pause()
+            if self._active_queue_job_id and self.batch_queue is not None:
+                try:
+                    self.batch_queue.pause(self._active_queue_job_id, True)
+                except Exception:
+                    self._logger.exception("Pausenstatus konnte nicht gespeichert werden")
             self.pause_button.setText("Fortsetzen")
             self.activity_label.setText("Pausiert · Abbrechen bleibt jederzeit möglich")
             self.statusBar().showMessage("Pause angefordert · wird am nächsten sicheren Punkt wirksam", 5000)
@@ -4089,6 +4671,9 @@ class MainWindow(QMainWindow):
         # stops a later episode before the final batch summary appears.
         if message.startswith("ÜBERSPRUNGEN:"):
             self._log(message)
+        if self._active_queue_job_id and now - self._last_queue_room_refresh >= 2.5:
+            self._last_queue_room_refresh = now
+            self._refresh_inline_queue()
 
     def _set_analysis_insight(self, title: str, description: str, status: str = "info") -> None:
         self.insight_title.setText(title)
@@ -4164,6 +4749,7 @@ class MainWindow(QMainWindow):
             worker.deleteLater()
         if error_text:
             self._worker_failed(error_text)
+            self._finish_queued_task(interrupted=True)
             if getattr(self, "_prewarm_refresh_pending", False):
                 QTimer.singleShot(0, self._refresh_after_prewarm)
             return
@@ -4186,6 +4772,7 @@ class MainWindow(QMainWindow):
             if self._current_job_is_batch and isinstance(result_value, dict) and callback:
                 # Display finished/skipped/failed episodes even after cancellation.
                 callback(result_value)
+            self._finish_queued_task(interrupted=True)
             if getattr(self, "_prewarm_refresh_pending", False):
                 QTimer.singleShot(0, self._refresh_after_prewarm)
             return
@@ -4194,6 +4781,7 @@ class MainWindow(QMainWindow):
         self._refresh_track_actions()
         if callback:
             callback(result_value)
+        self._finish_queued_task()
         if getattr(self, "_prewarm_refresh_pending", False):
             QTimer.singleShot(0, self._refresh_after_prewarm)
 
@@ -4233,6 +4821,7 @@ class MainWindow(QMainWindow):
         self.output_browse_button.setEnabled(enabled)
         self.organize_output_check.setEnabled(enabled)
         self.skip_existing_check.setEnabled(enabled)
+        self.resume_batch_button.setEnabled(enabled)
         self.root_languages_button.setEnabled(enabled)
         self.episode_table.setEnabled(enabled)
         self.episode_search.setEnabled(enabled)
@@ -4240,6 +4829,10 @@ class MainWindow(QMainWindow):
         self.detail_scroll.setEnabled(enabled)
         if hasattr(self, "profile_quick_combo"):
             self.profile_quick_combo.setEnabled(enabled)
+        if hasattr(self, "queue_room"):
+            self._refresh_inline_queue()
+        if hasattr(self, "review_panel"):
+            self.review_panel.set_processing_enabled(enabled)
         # Track checks remain visually stable; export buttons are recalculated on completion.
         self.analyze_button.setEnabled(enabled and bool(self._active_track_rows()))
         self.export_button.setEnabled(enabled and bool(self._active_track_rows()) and all(
@@ -4288,6 +4881,11 @@ class MainWindow(QMainWindow):
             self._track_override_timer.stop()
             self._save_settings()
         if not self._confirm_replace_project():
+            event.ignore()
+            return
+        if not self.review_panel.stop_workers():
+            QMessageBox.information(self, "Bildvorschau wird beendet",
+                                    "FFmpeg beendet gerade den Framevergleich. Bitte kurz warten.")
             event.ignore()
             return
         self._save_settings()

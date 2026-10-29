@@ -30,7 +30,8 @@ class UnsafeEpisodeRetryTests(unittest.TestCase):
         return MediaInfo(path, 1327.117, 'matroska', 200, [self.video, self.audio], 1, 1, 0)
 
     def result(self, safe):
-        anchors = [Anchor(i * 15.0, i * 15.0 + 110.0, 4) for i in range(70)]
+        # A claimed-safe mapping must also have evidence near the episode end.
+        anchors = [Anchor(i * 19.0, i * 19.0 + 110.0, 4) for i in range(70)]
         return AlignmentResult(
             source_path=str(self.source), target_path=str(self.master),
             slope=1.0, offset=110.0, anchors=anchors,

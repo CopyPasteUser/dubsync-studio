@@ -7,7 +7,7 @@ from unittest.mock import patch
 import numpy as np
 
 from dubsync.core.alignment import FrameSample, _long_offset_alignment, align_videos, AlignmentError
-from dubsync.core.models import MediaInfo, StreamInfo
+from dubsync.core.models import AlignmentResult, Anchor, MediaInfo, StreamInfo
 
 
 def info(name: str, duration: float) -> MediaInfo:
@@ -75,6 +75,46 @@ class LongOffsetTests(unittest.TestCase):
         source = content + [FrameSample(f.time + 30, f.phash) for f in self.frames(270)]
         target = content + [FrameSample(f.time + 30, f.phash) for f in self.frames(420)]
         self.check(source, target, allowed=False)
+
+    def test_shared_intro_and_credits_cannot_mask_different_middle(self):
+        # Different episodes can share substantial opening AND closing footage.
+        # Matching both ends is not proof that the dialogue in between aligns.
+        source = self.frames(300)
+        unrelated_middle = self.frames(180)
+        target = (source[:60]
+                  + [FrameSample(float(i + 60), frame.phash)
+                     for i, frame in enumerate(unrelated_middle)]
+                  + source[240:])
+        self.check(source, target, allowed=False)
+
+    def test_many_good_anchors_cannot_hide_unverified_middle(self):
+        # 60% convincing anchors, perfect affine fit and matching timecodes can
+        # still hide an entirely different 400-second middle section.
+        times = list(range(0, 300)) + list(range(700, 1000))
+        result = AlignmentResult(
+            'source.mkv', 'master.mkv', 1.0, 0.0,
+            [Anchor(float(t), float(t), 0) for t in times],
+            .95, 1.0, .60, 0.0, 0.0, 1000.0, 1000.0, 1.0,
+            visual_distinct_hashes=600,
+        )
+        self.assertFalse(result.safe_for_automatic_export)
+
+    def test_many_good_anchors_cannot_hide_unverified_ending(self):
+        times = list(range(700))
+        result = AlignmentResult(
+            'source.mkv', 'master.mkv', 1.0, 0.0,
+            [Anchor(float(t), float(t), 0) for t in times],
+            .95, 1.0, .70, 0.0, 0.0, 1000.0, 1000.0, 1.0,
+            visual_distinct_hashes=700,
+        )
+        self.assertFalse(result.safe_for_automatic_export)
+
+    def test_extra_intro_outside_shared_timeline_is_not_unverified_edge(self):
+        anchors = [Anchor(float(i), float(i + 150), 0) for i in range(300)]
+        result = AlignmentResult('source.mkv', 'master.mkv', 1.0, 150.0,
+                                 anchors, .95, 1.0, 1.0, 0.0, 0.0,
+                                 300.0, 450.0, 1.0, visual_distinct_hashes=300)
+        self.assertTrue(result.safe_for_automatic_export)
 
     def test_partially_shared_episode_with_different_ending_is_not_approved(self):
         # Only 70% belongs to the same timeline, so a single offset must not

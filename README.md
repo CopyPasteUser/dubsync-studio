@@ -1,10 +1,424 @@
-# DubSync Studio 1.5.14
+# DubSync Studio 2.0.0b2
 
-> **Vibe-coded:** Konzept, Anforderungen, reale Tests und Qualitätsentscheidungen stammen von mir; bei Implementierung und Iteration habe ich KI-Unterstützung verwendet.
+Lokale Desktop-Anwendung, die Sprachfassungen derselben Episode anhand ihrer
+**Videobilder** synchronisiert und zusätzliche Tonspuren in eine MKV-Datei
+übernimmt. Entwickelt für Serienbibliotheken, unterschiedliche Intros und
+große Stapel – mit nachvollziehbaren Sicherheitsprüfungen vor jedem Export.
 
-## Screenshots
+![DubSync Studio – Illustration von Filmankern und synchronisierten Audiospuren](docs/media/dubsync-studio-hero.webp)
 
-Echte Screenshots der aktuellen 1.5.14-Oberfläche folgen.
+*Gestaltete Titelillustration, kein Screenshot. Eine interaktive Audio-Waveform
+gehört zur [späteren Roadmap](docs/ROADMAP_NEXT.md), nicht zum Funktionsumfang
+der aktuellen Beta.*
+
+**Stand:** `2.0.0b2` · **Status:** Beta · **Plattform:** Linux-Desktop (reale
+Windows-/GPU-Kompatibilität noch in Prüfung) · **Stack:** Python, PySide6,
+FFmpeg/FFprobe, OpenCV und NumPy · **Lizenz:** MIT
+
+**Vibe-coded / KI-unterstützt:** Konzept, Anforderungen, Testfälle und
+Qualitätsentscheidungen werden vom Projektinhaber gesteuert; für Implementierung
+und Iteration wird KI-Unterstützung genutzt.
+
+> **Wichtig zum Beta-Status:** Der zusammenhängende Studio-Arbeitsplatz mit
+> Bildanker-Timeline, Framevergleich auf Abruf und integrierter Stapelzentrale
+> ist implementiert. Automatisierte Regressionen und Qt-Offscreen-Ansichten
+> wurden geprüft. Reale AMD-/Intel-/NVIDIA-Hardware, NAS-Störungen und
+> plattformübergreifende Bedienung sind noch **keine** bestätigten Freigaben
+> für eine stabile 2.0.0. Siehe [Release-Checkliste](docs/RELEASE_CHECKLIST.md).
+
+## Was DubSync kann
+
+- **Sprachfassungen anhand des Bildmaterials zuordnen:** Bildanker statt
+  sprachabhängiger Audioähnlichkeit; Warnungen bei falschen oder unterschiedlich
+  geschnittenen Episoden.
+- **Synchronisation sichtbar prüfen:** gemessene Anker, Abdeckungsgrad,
+  unsichere Bereiche und Framevergleich auf ausdrücklichen Abruf.
+- **Mehrsprachige MKVs erzeugen:** vorhandene Videospur bleibt unangetastet;
+  Audiospuren und Spracheinstellungen werden vor dem Muxen geprüft.
+- **Staffeln im Stapel bearbeiten:** dauerhafte SQLite-Warteschlange,
+  Diagnoseberichte sowie ausdrückliches Fortsetzen und erneutes Einplanen.
+- **Hardware bewusst nutzen:** Leicht/Mittel/Stark und Auto,
+  Intel-/AMD-iGPU- und dGPU-Decoderkandidaten, codecbezogene Messungen und
+  geprüfter CPU-Fallback. GPU-Beschleunigung betrifft das Decoding, nicht
+  automatisch den Bildvergleich.
+- **Sicher mit NAS arbeiten:** erkennungsbasierte Schonung von Netzwerkpfaden,
+  kein automatischer Neustart von Jobs, kein stilles Überschreiben. Echte
+  Verbindungsabbrüche müssen für den Stable-Release noch geprüft werden.
+
+## Einblicke in die 2.0-Oberfläche
+
+Die folgenden **echten Qt-Screenshots** wurden mit **synthetischen Demo-Daten**
+aufgenommen. Sie zeigen weder echte Medieninhalte noch erfolgreich geprüfte
+Exporte oder GPU-Leistungsmessungen.
+
+| Studio & Bildanker | Framevergleich |
+| --- | --- |
+| ![Studio mit Episodenliste und Anker-Timeline](docs/screenshots/studio-review-2.png) | ![Framevergleich der beiden Fassungen](docs/screenshots/studio-frames-2.png) |
+| **Persistente Stapelzentrale** | **Hardwareprofile** |
+| ![Auftragsliste und sichere Wiederaufnahme](docs/screenshots/studio-queue-2.png) | ![Hardwareadaptive Leistungsprofile](docs/screenshots/studio-hardware-presets-2.png) |
+
+Weitere Ansichten: [Bibliothek](docs/screenshots/studio-library.png) ·
+[Export](docs/screenshots/studio-export.png).
+
+## Schnellstart unter Linux
+
+**Voraussetzungen:** Python 3.10+, `ffmpeg` und `ffprobe` im `PATH`,
+ein unterstütztes glibc-basiertes Linux. Der Installer benötigt kein `sudo`.
+
+```bash
+# Im entpackten oder geklonten Projektordner
+./install-wizard.sh  # grafischer Installationsassistent
+
+# Alternativ ohne feste Desktop-Installation
+./setup.sh
+./run.sh
+```
+
+Der Installer richtet die Python-Abhängigkeiten isoliert ein. Systempakete
+wie FFmpeg müssen vorher installiert sein; sie werden nicht ohne Zustimmung
+nachinstalliert. Details und Distributionen:
+[Linux-Installation](docs/INSTALL_LINUX.md). Für eine erste Prüfung ohne GUI:
+`./run.sh --doctor`.
+
+**Navigation:** `Alt+1` Studio · `Alt+2` Stapelzentrale · `Alt+3` Aktivität ·
+`Strg+F` Episodensuche · `Strg+Umschalt+J` Queue-Details.
+
+**Weiterlesen:** [Architektur](docs/ARCHITECTURE.md) ·
+[Sicherheitsmodell](SECURITY.md) · [Roadmap bis 2.0](docs/ROADMAP_2_0.md) ·
+[Nächste Releases](docs/ROADMAP_NEXT.md) · [Changelog](CHANGELOG.md).
+
+## DubSync Studio 2.0 – so arbeitest du im neuen Schnittplatz
+
+1. **Studio** (`Alt+1`): Ordner der verschiedenen Sprachfassungen hinzufügen,
+   Bibliothek scannen, links eine Episode auswählen. Mit `Strg+F` durchsuchst du
+   die Episodenliste. Der Bildmaster ist weiterhin die kleinste geeignete
+   Videodatei oder eine bewusst manuell gewählte Referenz.
+2. **Abgleich-Monitor** (Mitte): Eine Quellfassung auswählen, `Analyse starten`
+   und die **Zeitachse** prüfen. Mintfarbene Linien markieren tatsächlich
+   gemessene Bildanker, flächige Bereiche bestätigte Segmente; dunkle Lücken
+   sind **keine** automatisch verifizierten Szenen. Klick auf die Timeline
+   setzt die Position; `←`/`→` bewegen sie 5 Sekunden, `Bild auf`/`Bild ab`
+   30 Sekunden, `+`/`−` zoomen. Der Qualitätsblock zeigt Konfidenz, Anker,
+   Abdeckung und unbestätigte Zeitlücken. Ein unsicherer Abgleich bleibt unsicher.
+3. **Framevergleich** (zweiter Reiter des Monitors): Für die aktuelle Position
+   werden **erst nach „Frames laden“** maximal zwei FFmpeg-Standbilder aus
+   Bildmaster und Sprachfassung gelesen. Nicht zuordenbare Szenen zeigen
+   ausdrücklich **kein** Quellbild. Ohne Analyse ist der Zeitvergleich
+   ausdrücklich *nominell*, nicht synchronisationsbestätigt. Dadurch lösen
+   bloßes Öffnen und Wechseln der Folgen keine zusätzlichen NAS-Reads aus.
+4. **Spur-/Schnittkorrektur** (rechts): Sprache, Titel, gewählte Audiospur,
+   Startversatz und Schnittbereiche bleiben die bestehenden, voll nutzbaren
+   Bearbeitungsfunktionen. Manuelle Korrekturen heben die automatische
+   Export-Freigabe nicht auf. **Hörprobe** und **MKV erstellen** bleiben
+   explizite Benutzeraktionen.
+5. **Stapelzentrale** (`Alt+2`): Persistente Aufträge, Fortschritt,
+   Fehlermeldungen, Neustart-Fortsetzung und gezieltes Neuplanen siehst du
+   direkt in der Hauptansicht. Zielordner, Überspringen-/Fortsetzen-Regeln
+   und Hardwareprofil liegen weiter unten auf derselben scrollbaren Seite.
+   Es gibt keinen automatischen Start nach einem Neustart. Die alte
+   Warteschlangen-Detailansicht (`Strg+Umschalt+J`) bleibt erhalten.
+6. **Aktivität** (`Alt+3`): Vollständige Diagnose, Berichte und Jobs ansehen.
+   Fortschrittsanzeige, Pause und Abbruch bleiben auf allen Seiten erreichbar.
+
+Die Abgleichansicht verwendet ausschließlich tatsächlich gemessene
+Bildanker. Nicht bestätigte Zeitlücken bleiben im Studio sichtbar.
+
+### Hardware und Datenzugriff
+
+AMD-dGPU, Intel- und AMD-iGPU bleiben über die vorhandenen geprüften
+FFmpeg-Decoderpfade (beispielsweise VAAPI unter Linux, D3D11VA unter Windows)
+ansprechbar. Das beschleunigt bei kompatibler Hardware **Video-Einlesen**,
+nicht automatisch den Bild-Matching-Algorithmus. Erreicht ein GPU-Pfad die
+Qualitäts- oder Geschwindigkeitsprüfung nicht, wird der CPU-Weg gewählt.
+Geräte- und Codec-Unterstützung ist vom konkreten Treiber abhängig.
+Der neue Framevergleich benutzt bewusst keine zweite GPU-Autobenchmark-Runde.
+
+Weitere Details stehen in [GUI-Verifikation](docs/GUI_VERIFICATION.md),
+[Designentscheidungen 2.0](docs/STUDIO_2_0_DESIGN.md) und
+[Sicherheitskonzept](SECURITY.md).
+
+## Neu in 1.6: Stapel-Warteschlange mit sicherem Wiederanlauf
+
+1. In der Exportansicht **„Gesamten Stapel starten“** wählen. Nach der Zuordnungs-
+   und gegebenenfalls Überschreibbestätigung können alle Episoden sofort gestartet
+   oder nur als Auftrag gespeichert werden.
+2. Unter **„Queue-Details …“** (auch **Strg+Umschalt+J**) sind alle Aufträge
+   nach einem Neustart wieder sichtbar. **„Ausgewählten starten / fortsetzen“**
+   reaktiviert einen unterbrochenen oder fehlgeschlagenen Auftrag. Es geschieht
+   **kein automatischer Start beim Öffnen**.
+3. **„Alle wartenden abarbeiten“** verarbeitet ausschließlich geplante Aufträge
+   nacheinander. Eine Bestätigung zum Überschreiben ist bei gespeicherten
+   Neuaufträgen erneut nötig. Abbruch und Fehler beenden die automatische Folge.
+4. **„Probleme neu einplanen“** legt aus dem unveränderten Stapelprotokoll einen
+   neuen Auftrag mit fehlgeschlagenen/übersprungenen/unbearbeiteten Episoden an;
+   Quellzuordnung und Position werden dafür geprüft. Der neue Lauf überschreibt
+   niemals bestehende MKVs automatisch.
+
+Während der Verarbeitung wird der Auftrag lokal und dauerhaft in einer privaten
+SQLite-Datenbank protokolliert (`$XDG_STATE_HOME/dubsync-studio/batch-queue.sqlite3`,
+ansonsten `~/.local/state/dubsync-studio/batch-queue.sqlite3`). Gespeichert werden
+Quellpfade, Zuordnungen, Spuroptionen und Ressourcenprofil. Deshalb enthält die
+Datei private lokale Verzeichnisnamen (Unix-Berechtigung `0600`, Elternordner
+`0700`). Der bisherige Job-Verlauf bleibt davon unabhängig.
+
+Nach einem Abbruch werden nur diejenigen Ausgaben ausgelassen, deren vorheriges
+Journal **dieselbe Exportrezeptur, Quellen und fertige MKV** nach den bestehenden
+Prüfkriterien belegt. Geänderte oder nicht belegbare Ausgaben bleiben unberührt
+und werden zur Prüfung angezeigt, statt still überschrieben zu werden. Frühere
+manuell ausgewählte `batch-*.json`-Protokolle funktionieren weiterhin.
+Auch nach mehreren nacheinander abgebrochenen Wiederaufnahmen bleibt der frisch
+verifizierte Nachweis für frühere fertige Episoden in den Folgejournalen erhalten.
+
+Für neue Stapel begrenzt eine Momentaufnahme der Systemlast und des freien RAM
+die angeforderte Decoder-Parallelität bei Bedarf auf einen Worker. Zusätzliche
+NAS-/GPU-Schutzregeln werden weiterhin pro Episode angewendet; Intervall,
+Bildanker-Grenzen und Sicherheitsprüfung werden dadurch nicht reduziert.
+Der gesamte Ressourcenplan bleibt für den Wiederanlauf gleich, damit die
+Journal-Rezeptur unverändert bleibt.
+
+**Prüfstatus:** Simulierter Prozess-Neustart mit zwei Episoden und vorhandenem
+Journal ist automatisiert abgedeckt; reale NAS-Ausfälle, Stromverlust und
+Plattform-GPU-Messungen benötigen weitere Geräteprüfungen. Die 1.6 ist daher
+eine **Beta**, kein voll verifizierter stabiler Release.
+
+## Neu: sichere Stapel-Fortsetzung, GPU-Favorit und Segment-Undo
+
+- **Stapel fortsetzen:** In der Serienansicht „Stapel fortsetzen …“ auswählen
+  und eine zuvor erzeugte `batch-*.json` im Protokollordner öffnen. DubSync
+  erkennt abgeschlossene Ausgaben nur dann als verifiziert, wenn die früheren
+  Quelleinstellungen, alle aktuellen Quelldateien und die aktuelle MKV-Signatur
+  übereinstimmen **und** die MKV heute noch Video und Audio enthält. Andere
+  Dateien unterliegen den bisherigen Überspringen-/Überschreiben-Regeln;
+  ein unpassendes Protokoll führt zu einer sichtbaren Fehlermeldung.
+- **Schnellerer GPU-Automodus:** Bei mehreren AMD-, Intel- oder NVIDIA-Adaptern
+  speichert die laufende Sitzung für einen Codec kurzzeitig den schnellsten
+  zuvor geprüften Decoder. Die nächste Datei wird trotzdem frisch gegen CPU
+  validiert. Sechs Folgemessungen später werden alle Adapter erneut verglichen.
+  Auf NAS-Medien bleiben zusätzliche GPU-Benchmarks deaktiviert.
+- **Besserer Schnittbereich-Editor:** Ausgewählter Abschnitt ist in beiden
+  Zeitachsen umrandet, Dauer und Startversatz stehen direkt darunter. Undo/Redo
+  funktioniert auch für Zeitwerte; beim Abbrechen fragt DubSync, ob ungespeicherte
+  Änderungen verworfen werden sollen. Manuelle Grenzen sind keine unabhängige
+  visuelle Freigabe für den automatischen Export.
+
+**Hinweis zur Prüfung:** Wiederaufnahme-Signaturen lesen fünf verteilte
+Dateifenster; sie sind keine vollständige kryptografische Medienprüfung.
+Wer sicher ausschließen will, dass ein zwischen den Prüffenstern veränderter
+Inhalt übersehen wird, muss die betreffende Episode neu synchronisieren.
+
+## Neu: schnellerer Bildabgleich bei schwierigen Schnitten
+
+Der alternative Szenenabgleich für Videos mit abweichenden Intros, fehlenden
+Szenen oder leichter Zeitdrift arbeitet jetzt mit vektorisierten
+Bildfingerprint-Vergleichen. Auch die Suche nach der plausibelsten zeitlichen
+Zuordnung wurde optimiert. Unterschiedliche Videoversionen lassen sich damit
+bei großen Bildprobenmengen schneller untersuchen, ohne die Grenzwerte für
+automatischen Export zu lockern. Der Diagnosebericht unterscheidet jetzt
+die Zeit für Bildkandidaten und Zeitmodell-Bewertung.
+
+**Wichtig:** Das beschleunigt diesen bestimmten Analyseabschnitt, nicht die
+gesamte Video-Decodierung. Wie stark DubSync insgesamt schneller wird, hängt
+weiter von Video, Speicherort und Hardware ab.
+
+## Neu: automatische GPU-Wahl auf Hybrid-Systemen (Entwicklungsvorschau)
+
+DubSync kann jetzt bei längeren **lokalen** Videos mehrere GPU-Decoder
+vergleichen: NVIDIA CUDA, AMD-VAAPI und Intel-VAAPI auf Linux bzw. die
+verfügbaren CUDA-/D3D11VA-Pfade auf Windows. Bei einem Intel-/AMD-Hybridsystem
+wird die iGPU nicht mehr automatisch zugunsten der ersten AMD-Rendernode
+übergangen. Bis zu vier lokal zugängliche Kandidaten treten nacheinander gegen
+**einen gemeinsamen FFmpeg-CPU-Referenzlauf** an. Nur ein nachweisbar schnellerer
+Pfad mit ausreichend ähnlichen Bildfingerprints wird übernommen; andernfalls
+bleibt das bisherige OpenCV-Decoding aktiv. Das entschärft auch unnötig
+wiederholte CPU-Benchmarkläufe auf Multi-GPU-Rechnern.
+
+Es handelt sich um einen **Decoder-Vergleich**, nicht um GPU-Beschleunigung des
+Bild-Matchers. Die tatsächliche Hardware-Ausführung kann FFmpeg trotz
+angefordertem Backend nicht in jedem Fall garantieren. Auf erkannten NAS-Pfaden
+überspringt der Automatikmodus den mehrmaligen GPU-Vergleich bewusst, um das
+Netzwerk nicht unnötig zu lesen. Gezielte AMD-/Intel-/CPU-Auswahl bleibt in den
+Leistungseinstellungen möglich.
+
+```bash
+# Beim nächsten lokalen Test alle erkannten Decoder vergleichen (nur lesend):
+python -m dubsync --benchmark-decode "/pfad/zur/Folge.mkv" --benchmark-gpu all --json
+```
+
+**Validierungsgrenze:** Hybrid-GPUs und Fehlerpfade wurden mit simulierten
+Geräteinformationen geprüft; ein echter GPU-/NAS-Leistungsvergleich ist auf dem
+Zielsystem nachzuholen. Die bestehenden Regeln für Episodenidentität und
+automatische Exportfreigabe bleiben unverändert.
+
+## Neu: integrierte GPUs, lokale Decoder-Parallelität und Laufzeitprofil (Entwicklungsvorschau)
+
+- **Intel-iGPU unter Linux:** Neben AMD-VAAPI gibt es bei erkennbarem Intel-DRM-Rendergerät
+  die gezielte Option **Intel-Grafik · integrierte GPU via VAAPI**. Damit kann auf
+  einem hybriden Intel-/AMD-Rechner ausdrücklich die integrierte Intel-GPU gewählt
+  werden. Eine integrierte AMD-GPU wird über den bestehenden AMD-VAAPI-Modus
+  angesprochen. Der FFmpeg-Treiber und der Codec müssen Hardware-Decoding erlauben;
+  bei Fehlern bleibt der CPU-Fallback erhalten. Unter Windows bleibt D3D11VA für
+  integrierte und dedizierte GPUs verfügbar, ohne herstellerspezifische Gerätewahl.
+- **Lokale Videoquellen parallel lesen:** Das starke Analyseprofil kann auf
+  Geräten mit ausreichend CPU und RAM zwei Videos derselben Folge gleichzeitig
+  vorbereiten. Unter **Leistung → Feineinstellungen → Video-Einlesen** sind ein
+  oder zwei Decoder wählbar. Bei erkannten NAS-/Netzwerkpfaden, knappem CPU-/RAM-
+  Budget oder einem laufenden GPU-Autobenchmark wird vorsorglich seriell gelesen.
+  Der Bildabgleich selbst bleibt pro Folge einmalig und überprüft **alle bisherigen
+  Sicherheitsbedingungen** neu.
+- **Laufzeitprofil statt geschätzter Geschwindigkeitsversprechen:** Jeder
+  Bildabgleich protokolliert Laufzeiten für Metadaten, Videodecoding und
+  Bildabgleich sowie die effektive Decoderzahl. Diese Werte erscheinen im
+  Diagnosebericht, auch für nicht freigegebene Analysen. Für einen Vergleich
+  mit echten Mediendateien (liest die Videos, erzeugt keinen Export):
+
+  ```bash
+  python -m dubsync --profile-alignment "/pfad/quelle.mkv" "/pfad/master.mkv" --profile-workers 1 --profile-decoder ffmpeg
+  python -m dubsync --profile-alignment "/pfad/quelle.mkv" "/pfad/master.mkv" --profile-workers 2 --profile-decoder ffmpeg
+  python -m dubsync --benchmark-decode "/pfad/quelle.mkv" --benchmark-gpu intel-vaapi --json
+  ```
+
+  `--profile-alignment ... --json` liefert zusätzlich die maschinenlesbare
+  Pipeline-Messung. Für belastbare Vergleiche denselben Dateisatz mit denselben
+  Optionen und ohne Hintergrundlast messen; der Profil-Befehl deaktiviert den
+  Fingerprint-Cache bewusst. Bei GPUs gilt weiterhin: *Decoder-Anforderung
+  ist kein Beweis der Hardware-Ausführung*, und GPU-Transferkosten können
+  softwarebasiertes Decoding schneller machen.
+
+  **Testgrenze:** Synthetische lokale Medien und simulierte SMB/NFS-Pfade sind
+  geprüft. Das aktuell nicht erreichbare NAS wurde nicht kontaktiert; echte
+  Intel-/AMD-iGPUs müssen auf dem Zielrechner gegen die dortigen Treiber/Codecs
+  gemessen werden.
+
+## Neu: Radeon-Decoding und geprüfter Video-Fingerprint-Cache (Entwicklungsvorschau)
+
+- **AMD Radeon unter Linux:** Im Leistungsdialog gibt es bei erkanntem und
+  zugänglichem AMD-DRM-Rendergerät den Modus **„AMD Radeon · VAAPI-Rendergerät“**.
+  Er adressiert gezielt die AMD-GPU, auch wenn zusätzlich eine Intel-GPU vorhanden
+  ist. Der allgemeine VAAPI-Modus bleibt für Intel und AMD verfügbar. Unter
+  Windows kann auch eine AMD-GPU den systemweiten **D3D11VA**-Decoder nutzen.
+  Ob die konkrete Videodatei den GPU-Decoder tatsächlich verwendet, hängt von
+  Treiber/Codec/FFmpeg ab; ein Decoderwunsch allein beweist das noch nicht.
+- **Wiederholte Videoanalysen werden schneller:** DubSync speichert die bereits
+  decodierten kleinen Bildfingerprints pro Datei. Bei jedem Abruf werden Größe,
+  Zeitstempel und **11 über die Datei verteilte Inhaltsbereiche frisch gelesen**.
+  Ändert sich eine Datei, wird neu decodiert. Ein Quellwechsel oder anderes
+  Samplingprofil erzeugt ebenfalls einen getrennten Eintrag.
+- **Keine veralteten Episodenentscheidungen:** Der Cache enthält nur pHashes und
+  Zeitpositionen, *keine* Ankerzuordnung, keine fertigen Alignment-Ergebnisse und
+  keine Exportfreigabe. Jede Analyse berechnet die Zuordnung und sämtliche
+  Sicherheitsgrenzen erneut; der alte Ergebnis-Cache bleibt deaktiviert.
+  Im Leistungsdialog kann „Bildfingerprints wiederverwenden“ abgeschaltet werden.
+  Der Cache ist im Benutzerverzeichnis auf **400 Einträge / maximal 128 MiB**
+  begrenzt und kann jederzeit gelöscht werden, ohne Medien zu ändern.
+
+  Beispiel für AMD-spezifisches Decoding-Benchmarking:
+
+  ```bash
+  python -m dubsync --benchmark-decode "/pfad/zur/Folge.mkv" --benchmark-gpu amd-vaapi --benchmark-seconds 12
+  ```
+
+  **Grenzen:** Die Änderungserkennung nutzt einen verteilten Datei-Fingerprint,
+  keinen vollständigen Hash sämtlicher Medienbytes. Bei absichtlich unter
+  unveränderten Dateimetadaten manipulierten Dateien ist ein Cache-Treffer nicht
+  kryptografisch ausgeschlossen. Für besonders sensible Medien lässt sich der
+  Fingerprint-Cache im Leistungsdialog deaktivieren. Echte AMD-GPU-Hardware war
+  in der Testumgebung nicht vorhanden; Tests prüfen Geräteauswahl, Fallback und
+  die unveränderte Zuordnungssicherheit, aber noch nicht die GPU-Ausführung.
+
+## Neu: Hardwarebewusstes Video-Decoding (Entwicklungsvorschau)
+
+- **CUDA/NVDEC unter NVIDIA**, **VA-API unter Intel/AMD** und **D3D11 unter Windows**
+  können für die Frame-Extraktion über FFmpeg angefordert werden. Die tatsächliche
+  Nutzbarkeit hängt vom Decoder, Treiber und Videocodec ab; Fehler fallen ohne
+  Export-Freigabeänderung auf den bewährten OpenCV-Pfad zurück.
+- **Auto** lässt OpenCV standardmäßig aktiv. Für längere Videos mit plausibel
+  verfügbarer GPU werden CPU und GPU auf einem kurzen Ausschnitt gemessen.
+  Der GPU-Pfad wird nur bei messbarem Vorteil und hinreichend ähnlichen
+  Bildfingerprints übernommen. Das verhindert unnötige GPU-Startkosten und
+  stellt sicher, dass „GPU“ nicht pauschal als schneller dargestellt wird.
+- **FFmpeg CPU-Sampling** ist als explizit auswählbare Alternative verfügbar:
+  Es verkleinert die Frames vor der Übergabe an Python auf 32×32 Pixel. Ob das
+  schneller als OpenCV ist, hängt von Codec und Hardware ab.
+- Eine reproduzierbare Messung für deine eigenen Videos:
+
+  ```bash
+  python -m dubsync --benchmark-decode "/pfad/zur/Folge.mkv" --benchmark-seconds 12
+  ```
+
+  Mit `--json` erhältst du Messdaten für Diagnose und Vergleich. Es wird **nur
+  gelesen**, keine Mediendatei geändert. Die Ausgabe misst FFmpeg-CPU gegen
+  die lokal plausible FFmpeg-GPU, nicht die gesamte Synchronisationspipeline.
+  Der pHash-Abgleich und die Qualitäts-/Sicherheitsgrenzen bleiben CPU-basiert.
+
+  **Stand:** Die neue FFmpeg-Extraktion und die Auswahl-/Fallback-Logik wurden
+  mit synthetischen Videodateien getestet. Echte GPU-Hardware war in der
+  Entwicklungsumgebung nicht vorhanden; die GPU-Ausführung selbst ist
+  **noch nicht auf NVIDIA/AMD/Intel verifiziert**.
+
+> **Entwicklungsvorschau – Segment-Editor:** Der Dialog besitzt inzwischen gezielte
+> Qt-Regressionstests (Teilen, Deaktivieren, Überlappungen und Sicherheitsstatus).
+> Reale Schnittfassungen und das Zusammenspiel mit deinem Linux-Desktop/NAS sind
+> weiterhin nicht vollständig verifiziert. Bitte erste Exporte kontrollieren.
+
+### Neu: Schnittbereiche manuell bearbeiten
+
+Nach **Bibliothek → Episode → Synchronisation analysieren** kannst du bei einer
+zusätzlichen Audiospur **„Schnittbereiche …“** öffnen. Der Editor zeigt zwei
+Zeitachsen und eine Tabelle mit Quellstart/-ende und Masterstart/-ende in Sekunden.
+Du kannst Grenzen direkt eingeben, einen Abschnitt in zwei Teile aufteilen,
+Abschnitte entfernen oder über **Aktiv** stummschalten. Nicht zugeordnete
+Master-Bereiche bleiben in der zusätzlichen Audiospur stumm. **Abbrechen**
+verwirft alle Änderungen im Dialog; **Änderungen verwerfen** stellt die beim
+Öffnen vorhandene Zuordnung wieder her.
+
+Die Eingabe wird auf zeitliche Reihenfolge, Überlappungen, Dateigrenzen,
+Mindestlänge und zulässigen Zeitmaßstab geprüft. Diese Prüfung bestätigt
+**nicht** die Bildübereinstimmung. Jede manuelle Änderung erfordert deshalb
+beim **Einzelexport** eine ausdrückliche Warnungsbestätigung. Mit der
+**„Auto“**-Schaltfläche neben der Spur kannst du die automatische Zuordnung
+wiederherstellen. Der automatische Serienstapel überspringt Episoden mit
+manuell editierten Schnittbereichen und nennt den Grund im Stapelbericht.
+
+Manuelle Schnittbereiche bleiben beim Wechsel zwischen Episoden in der Sitzung
+erhalten. Beim **expliziten Speichern eines `.dubsync`-Projekts** werden sie
+ebenfalls gespeichert und nach erneuter Analyse nur dann übernommen, wenn
+Größe und Änderungszeit beider Quelldateien unverändert sind. Die Bearbeitungen
+werden nie als automatisch geprüft ausgegeben. Manuelle Zeitversatz- oder
+Skalenänderungen ersetzen wie bisher eine Segmentzuordnung durch den linearen
+Modus; bei ausreichenden neu berechneten Bildankern kann die bestehende
+lineare Sicherheitsprüfung weiterhin eine automatische Freigabe erlauben.
+
+![Historische Oberfläche aus der 1.5-Serie](docs/screenshots/studio-library.png)
+
+*Historischer Screenshot des 1.5-Editors; die neue 2.0-Oberfläche ist am Anfang
+dieser README abgebildet.*
+
+## Zusätzliches Sicherheits- und Performance-Update
+
+- **Experimentelle, konservative Schnittkorrektur:** DubSync kann mehrere klar bestätigte Szenenbereiche getrennt synchronisieren, beispielsweise wenn mitten in der Folge ein Abschnitt eingefügt oder entfernt wurde. Der neue Ton bleibt an unbelegten Masterstellen stumm, statt Dialog aus der falschen Szene zu verwenden. Normale lineare Abgleiche bleiben unverändert.
+- Der automatische Export benötigt jetzt bestätigte Bildanker über die **gemeinsame** Laufzeit: höchstens 20 % ungeprüfter Abschnitt im Mittelteil und höchstens 15 % ungeprüfter Abschnitt am Anfang oder Ende. Ein zusätzliches Intro, das außerhalb der gemeinsamen Timeline liegt, zählt nicht als Fehler.
+- Bei zu großen Lücken erklärt die Diagnose, warum ein Bildabgleich trotz guter globaler Trefferquote nicht für einen automatischen Export genügt. Die Audiospur wird dann nicht ohne ausdrückliche Freigabe exportiert.
+- Vor dem Übernehmen einer fertigen MKV kontrolliert DubSync die übernommenen Video-, Audio-, Untertitel- und Anhangsströme sowie die Laufzeit und den Codec neu hinzugefügter Audiospuren. Schlägt die Prüfung fehl, wird die temporäre Ausgabe verworfen; Originale bleiben unangetastet.
+- Der CPU-Bildsequenzabgleich verwendet eine vektorisierte NumPy-Berechnung. Im isolierten 700×700-Sample-Test war er etwa zwölfmal schneller; die gesamte Analyse kann weiterhin vom Video-Decoding oder einem NAS-Laufwerk begrenzt werden.
+
+## Neu in 1.5.15 – Studio-Oberfläche
+
+- Graphitgraue Qt-Oberfläche mit zurückhaltendem Mint-Akzent, klaren Fokus- und deaktivierten Zuständen.
+- Kompakte Reiter **Bibliothek / Export / Aktivität**, per Tastatur auch mit Alt+1 / Alt+2 / Alt+3.
+- Quellen über die gesamte Fensterbreite; nach dem Scan einklappbar und über „Quellen“ wieder erreichbar.
+- Mehr Platz für die Episodenliste und den separat scrollbareren Spur-Editor. Die Spaltenteilung ist verstellbar.
+- Eigene Leer- und Keine-Treffer-Zustände; das Löschen einer Suche stellt die Liste sofort wieder her.
+- Exportoptionen bleiben in kleinen Fenstern scrollbar. Hoher Kontrast weiterhin über Einstellungen.
+- Noch nicht analysierte Gruppen heißen **Abgleich offen**. Mehrere Fassungen allein bedeuten keine sichere Synchronisation.
+- Diagnoseaktionen sind in Aktivität gebündelt; Fortschritt, Pause und Abbruch bleiben dauerhaft sichtbar.
+- Die Live-Ansicht hält maximal 3000 Logzeilen; vollständige Protokolle bleiben über die bestehenden Berichte erreichbar.
+
+Der ursprüngliche GUI-Umbau aus 1.5.15 änderte die Medienalgorithmen nicht; die oben genannten Verbesserungen sind in diesem aktualisierten Paket zusätzlich enthalten.
+Die GUI nutzt weiterhin PySide6/Qt, ohne Browser-Engine oder zusätzliche Laufzeitabhängigkeiten.
+
+**Update:** ZIP entpacken, im entpackten `DubSyncStudio`-Ordner `bash install.sh` ausführen.
+Der bestehende Installationspfad und die virtuelle Umgebung werden vom Installer berücksichtigt;
+Details und alternative Zielpfade stehen in [INSTALL_LINUX.md](docs/INSTALL_LINUX.md).
 
 ## Neu in 1.5.14 – komplett überarbeitete Bedienung und Hardwareprofile
 
@@ -31,20 +445,28 @@ Scan-, Export-, Inhalts- und Sicherheitsalgorithmus aus 1.5.13 wurde nicht geän
 
 | Profil | CPU / Metadaten | Frames / Analyse | Zweck |
 | --- | --- | --- | --- |
-| **Leicht** | etwa halbe physische Kernzahl; ein Metadaten-Worker | max. 700; mindestens 1,25 s Abstand | Wenig Last, neben Spielen oder auf älterer Hardware |
-| **Ausgewogen** | bis auf einen physischen Kern; zwei Worker | max. 1200; mindestens 0,75 s | Alltag und NAS-Stapel |
-| **Stark** | etwa 1,5 × physische Kerne, begrenzt durch verfügbare logische Threads; bis zu vier Worker | max. 2200; mindestens 0,5 s | Gründlicher Bildabgleich, hohe Last |
-| **Auto** | passend zu CPU, Cgroup/Prozesslimit und RAM | hardwareabhängig | Empfehlenswerter Einstieg |
+| **Leicht** | ca. 25 % verfügbarer CPU-Threads, ein Metadaten-Worker, ein Video-Decoder | gleiche Analyseparameter | Niedrige Last, Multitasking oder Akkubetrieb |
+| **Mittel** | ca. 50 % der Threads, bis zu vier Metadaten-Worker | gleiche Analyseparameter | Alltag, Hintergrundverarbeitung |
+| **Stark** | fast alle CPU-Threads (ab vier Threads bleibt einer frei), bis zu acht Metadaten-Worker und zwei lokale Decoder | gleiche Analyseparameter | Größtmögliche sinnvolle Auslastung |
+| **Auto (Empfehlung)** | wählt anhand CPU-Threads, physischen Kernen und RAM eines der drei Presets | gleiche Analyseparameter | Für die meisten Systeme empfohlen |
 
-Werte werden auf dem jeweiligen Gerät anhand CPU-Affinität, Cgroup-Limits
-und RAM automatisch begrenzt. Bei NAS-Quellen greift zusätzlich das bestehende
-Limit von maximal zwei parallelen Metadatenabfragen. Mehr Frames bedeuten
-**nicht automatisch schnellere Exporte**: insbesondere das starke Profil
-benötigt für komplizierte Bildabgleiche mehr Zeit und Arbeitsspeicher.
+Ressourcenwerte werden auf jedem Gerät anhand CPU-Affinität, Cgroup-Limits und RAM
+**bei jedem Start und beim Profilwechsel neu berechnet**; gespeicherte Presets
+sind keine eingefrorenen Threadzahlen. Vor einem Warteschlangenauftrag reduzieren
+aktuelle Systemlast und verfügbarer Arbeitsspeicher bei Bedarf die Decoder-Parallelität.
+SMB-/NFS-Quellen werden für die Metadatenabfragen zusätzlich auf höchstens zwei
+Worker begrenzt; GPU-Autobenchmarks verhindern konkurrierende Decoder-Messungen.
+Für alle Presets gelten ab Werk **1200 Bildproben, 0,75 s Frame-Abstand und
+128 kbit/s AAC**. Wer im Dialog die Analysegenauigkeit oder Audioqualität
+ändert, behält diese Werte auch beim Umschalten zwischen Leicht/Mittel/Stark.
 
-Der Videodecoder wird nach Möglichkeit automatisch über unterstützte Hardware
-beschleunigt; ob VA-API/DRM tatsächlich funktioniert, hängt von Treiber und
-OpenCV/FFmpeg-Build ab. Es gibt weiterhin den CPU-Fallback. Die Frame-Vergleiche
+Der Videodecoder erkennt automatisch die **Intel-iGPU (VAAPI unter Linux)**,
+AMD-Rendernodes und weitere angebotene GPU-Kandidaten. Auf einem Laptop mit
+zugänglicher Intel-iGPU kann diese ohne manuelle Konfiguration vorgeschlagen
+werden. Nur ein **pro Video gemessener** GPU-Pfad, der inhaltlich mit dem CPU-Abgleich
+übereinstimmt und mindestens 15 % schneller ist, wird verwendet. Inkompatible
+Treiber, Rechte oder Codecs führen zum CPU-Fallback, nicht zu einem Abbruch.
+Die Frame-Vergleiche
 werden auf der CPU ausgeführt, und das Bildvideo wird beim MKV-Export nicht neu
 kodiert. Die automatischen Sicherheitsgrenzen bleiben in allen Profilen gleich.
 Profile und Ausgabeoptionen werden gemerkt; Episoden, Quellen und fertige
@@ -127,7 +549,9 @@ Skip-Grund; die Checkbox »Vorhandene Ausgaben überspringen« steuert das.
 
 > **Weiterhin enthalten:** Besserer Bildabgleich für große Zeitversätze bei weiterhin frischem Start. Jeder Start beginnt mit einer leeren Bibliothek und frischen Analysen. Alte Quellen, Zuordnungen, Zeitkorrekturen und Projektverweise werden nicht automatisch geladen. Dauerhafte Programmeinstellungen bleiben erhalten; ausdrücklich geöffnete Projektdateien weiterhin nutzbar.
 
-**DubSync Studio 1.5.14** ist eine lokale Linux-Desktop-Anwendung, um getrennte Fassungen derselben Episode zu analysieren und zusätzliche Audiospuren in eine MKV-Datei einzubetten.
+**DubSync Studio** ist eine lokale Desktop-Anwendung, um getrennte Fassungen
+derselben Episode zu analysieren und zusätzliche Audiospuren in eine MKV-Datei
+einzubetten. Die folgenden Abschnitte dokumentieren auch ältere Releases.
 
 ## Installation als Desktop-App auf verschiedenen Linux-Distributionen
 
@@ -242,8 +666,8 @@ Gespeichert bleiben nur **Ausgabeordner, Ausgabestruktur, Darstellungsoption „
 - Export durch erneutes FFprobe prüfen und die fertige Datei atomar einsetzen. Quelldateien werden nicht überschrieben.
 - Analyseergebnisse in einem lokalen Cache wiederverwenden.
 - Bei Einzel-Episoden und im Serien-Stapel standardmäßig die **kleinste Videodatei als Bildmaster** auswählen, um die Videodaten nicht unnötig mit der größten Fassung zu übernehmen. Im Einzel-Export kann das Bildmaster manuell geändert werden.
-- Systemprofil auf Basis der für den Prozess verfügbaren CPU-Kerne und des sichtbaren RAM-/Cgroup-Limits vorauswählen. Bei knappen Ressourcen wird das Sample-Budget gesenkt; bei leistungsfähigen Rechnern kann ein genaueres Profil gewählt werden.
-- Hardware-Decoding nur dann als automatische Voreinstellung wählen, wenn OpenCV einen passenden Decoder-Modus und das System eine passende Schnittstelle erkennen lässt; andernfalls bleibt CPU-Decoding der Standard.
+- Systemprofil auf Basis der für den Prozess verfügbaren CPU-Kerne, logischen Threads und RAM-/Cgroup-Limits empfehlen. Nur CPU- und Parallelitätsbudget anpassen, nicht die Ergebnisqualität.
+- Hardware-Decoding standardmäßig auf Auto setzen. Intel/AMD/NVIDIA-Kandidaten nach Treiber-/Codec-Eignung gegen CPU messen und bei fehlender Eignung sicher auf Software-Decoding zurückfallen.
 - Ungefähre Ausgabegröße pro ausgewählter Episode anzeigen und Stapel-Episoden überspringen, wenn der freie Speicher die geschätzte Größe plus Reserve voraussichtlich nicht abdeckt.
 - FFprobe-Metadaten innerhalb der Einzelanalyse wiederverwenden, sodass bereits untersuchte Quellen nicht sofort erneut abgefragt werden.
 
@@ -266,17 +690,21 @@ DubSync verarbeitet Dateien über normale Dateisystempfade. Für NAS-Freigaben g
 
 ## Unterstützungsumfang und bekannte Grenzen
 
-Die Synchronisationsengine in Version 1.5.1 modelliert die Zeitbeziehung derzeit mit **einer linearen Abbildung pro zusätzlicher Audiospur**:
+Die Standard-Synchronisationsengine nutzt weiterhin **eine lineare Abbildung pro zusätzlicher Audiospur**:
 
 `Referenzzeit = Zeitmaßstab × Quellzeit + Offset`
 
-Sie kann konstanten Versatz und globalen Drift abbilden. Bei einer zusätzlichen/fehlenden Szene, einem längeren Intro mitten in der Folge oder abschnittsweise wechselndem Drift kann ein einzelner Maßstab nicht genügen. Die Anwendung versucht solche Probleme über schlechte Abdeckung, Ausreißer, Restfehler oder unplausible Raten zu kennzeichnen und verlangt vor einem unsicheren Export eine bewusste Bestätigung. **Sie behauptet in solchen Fällen nicht, jeden einzelnen Schnitt automatisch korrigiert zu haben.** Vollständige abschnittsweise Zeitabbildung mit manuellen Ankern ist die wichtigste nächste Entwicklungsstufe.
+Sie kann konstanten Versatz und globalen Drift abbilden. Wenn die Videos eindeutige, monotone Bildtreffer auf beiden Seiten eines Schnitts besitzen, versucht DubSync stattdessen **bis zu fünf unabhängig geprüfte Zeitabschnitte**. Für jeden Abschnitt sind mindestens acht vertrauenswürdige Bildanker und acht unterschiedliche visuelle Inhalte erforderlich. Ein unbestätigter Masterbereich wird nicht durch Audio anderer Szenen ersetzt, sondern bleibt in der neuen Spur stumm. Größere Lücken, zu wenige Anker, falsche Episoden oder nicht monotone Reihenfolgen werden weiterhin abgelehnt. Eine manuelle Änderung an Offset/Skala deaktiviert den automatischen Segmentmodus für diese Spur.
+
+Das ist noch keine vollständige freie Edit-Timeline: Mehr als fünf Abschnitte, verzweigte Szenenfolgen, lange nicht bestätigte Bereiche und manuell editierbare Segmentgrenzen bleiben offen. Der neue Modus ist als technische Vorschau zu verstehen; kontrolliere besonders die Übergänge mit einer echten Episode, bevor du ihn für große unbeaufsichtigte Stapel verwendest.
+
+Ein konkreter Abnahmetest für echte Schnittfassungen steht unter [PIECEWISE_VALIDATION.md](docs/PIECEWISE_VALIDATION.md).
 
 Außerdem ist der aktuelle Bildabgleich besonders für Fassungen mit weitgehend gleichem Bildmaterial ausgelegt. Stark andere Schnittfassungen, überblendete Bildtexte und sehr niedrige Bildqualität können die Konfidenz reduzieren. Bitte Ergebnisse an mehreren Stellen einer Folge kontrollieren.
 
 ## Professionelle Projektverwaltung und Diagnose in 1.1.0
 
-- **Projektdateien (`.dubsync`)** speichern Quellordner, Sprach-/Tracknamenregeln, Ausgabeordner, Staffelordnerstruktur, Skip-Regeln, Analyseprofil, Dateiauswahl der Audiospuren, Tracktitel, bewusst manuell gesetzte Offset-/Scale-Korrekturen und explizite Bildmaster-Auswahlen. Automatisch erkannte Offsets werden nicht fälschlich als manuelle Korrekturen gespeichert. Projekte werden atomar gespeichert und mit Schema-Version validiert; nicht vorhandene Quellordner werden beim Öffnen gemeldet, nicht still entfernt.
+- **Projektdateien (`.dubsync`)** speichern Quellordner, Sprach-/Tracknamenregeln, Ausgabeordner, Staffelordnerstruktur, Skip-Regeln, Analyseprofil, Dateiauswahl der Audiospuren, Tracktitel, bewusst manuell gesetzte Offset-/Scale-Korrekturen, manuell editierte Schnittbereiche mit Dateisignaturen und explizite Bildmaster-Auswahlen. Automatisch erkannte Offsets werden nicht fälschlich als manuelle Korrekturen gespeichert. Projekte werden atomar gespeichert und mit Schema-Version validiert; nicht vorhandene Quellordner werden beim Öffnen gemeldet, nicht still entfernt.
 - **Ungespeicherte Änderungen** werden in der Fenstertitelleiste markiert. Vor dem Wechsel des Projekts oder beim Beenden fragt die Anwendung nach Speichern, Verwerfen oder Abbrechen.
 - **Persistenter Job-Verlauf** zeichnet Analyse-, Scan- und Exportaufgaben mit Start-/Endzeit, Status, Quellordnern, Ausgabeordner, Ergebnisdetails und Fehlerauszügen auf. Läuft die Anwendung unerwartet aus, werden Jobs beim nächsten Start als unterbrochen markiert. Der Verlauf ist begrenzt, damit die Datenbank klein bleibt.
 - **Rotierende Diagnoseprotokolle** liegen unter `$XDG_STATE_HOME/dubsync-studio/logs/dubsync.log` (Standard: `~/.local/state/dubsync-studio/logs/dubsync.log`). Bis zu fünf rotierte Dateien werden mit begrenzter Größe vorgehalten; Verzeichnis und Datei erhalten restriktive Rechte.
@@ -357,7 +785,7 @@ Die Anwendung verarbeitet Medien lokal. Sie lädt keine Medien hoch. Einstellung
 - Suchfeld und Filter für Episoden, Dateinamen, mehrsprachige Gruppen und Gruppen mit nur einer Datei. Der Filter löst keinen neuen Medien-Scan aus.
 - Tastaturkürzel: `Ctrl+O` Ordner hinzufügen, `F5` Bibliothek scannen, `Ctrl+Shift+E` Serien-Stapel, `Ctrl+Q` Beenden.
 - Bibliotheksbericht als JSON oder CSV mit Quellen, erkannter Episodenzuordnung, Zielpfadvorschau und vorhandenen Alignment-Metriken.
-- Analyseprofile **Schnell**, **Ausgewogen**, **Hohe Genauigkeit** und **Benutzerdefiniert**. CPU-Thread-Limit, Sample-Budget, Mindest-Sampleabstand, Hardware-Decoding-Wunsch und Analyse-Cache lassen sich einstellen.
+- Historisch waren **Schnell**, **Ausgewogen** und **Hohe Genauigkeit** an unterschiedliche Sampling-Budgets gekoppelt. Seit 2.0.0b2 heißen die drei Ressourcenprofile **Leicht**, **Mittel** und **Stark**; Bildprobendichte und AAC-Bitrate sind davon unabhängig einstellbar.
 - Frame-Sampling nutzt `grab()` für Zwischenframes und erzeugt Bildarrays nur für tatsächlich ausgewertete Samples. Das reduziert die pro Frame erforderlichen Array-Konvertierungen.
 - Begrenztes Sample-Budget kontrolliert die quadratische Laufzeit und den Speicherbedarf des dynamischen Frameabgleichs. Die Balanced-Vorgabe nutzt 1400 Samples, High Accuracy 2400.
 - Optionaler Hardware-Decoder-Request (Auto / VA-API und weitere vom Betriebssystem/OpenCV-Build angebotene Modi) mit CPU-Fallback bei nicht verfügbarem Backend.
@@ -366,7 +794,7 @@ Die Anwendung verarbeitet Medien lokal. Sie lädt keine Medien hoch. Einstellung
 
 ## Einstellungen verwenden
 
-Öffne in der Menüleiste **Einstellungen → Leistung & Analyse…**. **Automatisch – passend zu diesem System** ist die empfohlene Vorgabe. Sie berücksichtigt verfügbare CPU-Kerne, sichtbare RAM-/Cgroup-Grenzen und erkennbare Hardware-Decoding-Schnittstellen. **Schnell** reduziert das Sample-Budget; **Hohe Genauigkeit** prüft mehr Frames und benötigt dadurch mehr CPU-Zeit und RAM. Der automatische Vorschlag ist nur eine Startempfehlung; du kannst alle Werte ändern. Unter **Video-Decoding** kann ein Hardware-Decoder angefordert werden. Wenn das installierte OpenCV/FFmpeg-Backend ihn nicht unterstützt, fällt die Analyse auf CPU-Decoding zurück. Eine erfolgreiche Hardware-Nutzung kann nicht allein aus der Auswahl abgeleitet werden; kontrolliere bei Bedarf **Einstellungen → Systemdiagnose…**.
+Öffne **Einstellungen → Leistung & Analyse…**. **Auto** wählt aus **Leicht/Mittel/Stark** anhand der erkannten Hardware; die drei Presets steuern ausschließlich die Ressourcennutzung. CPU-Threads und Workerzahlen sind damit nicht an die Maschine gebunden, auf der ein Profil gespeichert wurde. Der Dialog bietet davon unabhängig die Bildprobendichte und AAC-Bitrate. **Video-Decoding → Auto** prüft passende GPU-Kandidaten, darunter die Intel-iGPU unter Linux via VAAPI; eine bloße Erkennung garantiert noch keine GPU-Ausführung. Bei Fehlern oder geringerem Durchsatz fällt DubSync auf CPU zurück. Details unter **Einstellungen → Systemdiagnose…**.
 
 Nutze das Suchfeld über der Episodenliste, um Folgen ohne erneuten Scan zu finden. Über **Projekt → Bibliotheksbericht exportieren…** kannst du die aktuelle Bibliothekszuordnung und verfügbare Analyseergebnisse als JSON oder CSV ablegen.
 
@@ -375,8 +803,8 @@ Nutze das Suchfeld über der Episodenliste, um Folgen ohne erneuten Scan zu find
 1. Stückweise Zeitabbildung und gezieltes Überspringen zusätzlicher/fehlender Szenen; derzeit wird pro zusätzlicher Audiospur eine lineare Zeitbeziehung (Offset plus gleichmäßiger Drift) geschätzt.
 2. Interaktive Timeline mit editierbaren Zeitankern und lokaler Neuanalyse.
 3. Sprachsegmentierung/VAD als zweite Evidenzquelle für schwierige Bildkorrespondenzen.
-4. Die persistente Job-Historie markiert unterbrochene Läufe nach einem Neustart; automatisches Fortsetzen unterbrochener Jobs ist noch nicht implementiert.
-5. Die Qt-GUI wird in CI mit PySide6 im Offscreen-Modus instanziiert und mit Basisaktionen geprüft. Ein zusätzlicher Sicht-/Bedienbarkeitstest auf einem realen Linux-Mint-/XFCE-Desktop ist weiterhin sinnvoll; in dieser Build-Umgebung ist PySide6 selbst nicht installiert.
+4. Die Job-Historie markiert unterbrochene Läufe. Seit 1.6 können gespeicherte Stapel **explizit** aus einer geprüften Warteschlange fortgesetzt werden; automatisches Fortsetzen ohne Zustimmung ist aus Sicherheitsgründen nicht vorgesehen.
+5. Die Qt-GUI wird in CI und lokal mit PySide6 im Offscreen-Modus instanziiert und mit Basisaktionen geprüft. Ein zusätzlicher Sicht-/Bedienbarkeitstest auf realen Linux-Mint-/XFCE- und Windows-Desktops ist für eine stabile 2.0 erforderlich.
 6. Zusätzliche Frame-Samples an erkannten Szenenwechseln sowie alternative Bildmerkmale für stark veränderte Fassungen.
 7. Auswahl mehrerer Audiospuren aus derselben Eingabedatei als zusätzliche Quellen; aktuell lässt sich eine ausgewählte Audiospur pro vorbereiteter Quelle konfigurieren.
 

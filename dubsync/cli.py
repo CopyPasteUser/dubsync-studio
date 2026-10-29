@@ -14,7 +14,7 @@ from pathlib import Path
 from dubsync.core.performance import system_specs, recommended_profile
 from typing import Any
 
-VERSION = "1.5.14"
+VERSION = "2.0.0b2"
 
 
 def doctor_report() -> dict[str, Any]:
@@ -38,6 +38,14 @@ def doctor_report() -> dict[str, Any]:
         "gpu_vendors_detected": specs["gpu_vendors"],
         "recommended_analysis_profile": recommended_profile(specs),
     }
+    from dubsync.core.ffmpeg_sampling import (ffmpeg_hardware_accels, likely_gpu_accel,
+                                              gpu_decode_candidates)
+    result["hardware"]["ffmpeg_acceleration_interfaces"] = sorted(ffmpeg_hardware_accels())
+    result["hardware"]["likely_gpu_decoder"] = likely_gpu_accel()
+    result["hardware"]["auto_gpu_candidates"] = [candidate.key for candidate in gpu_decode_candidates()]
+    from dubsync.core.ffmpeg_sampling import vaapi_render_device
+    result["hardware"]["linux_vaapi_nodes"] = {
+        "amd": vaapi_render_device("amd"), "intel": vaapi_render_device("intel")}
     for tool in ("ffmpeg", "ffprobe"):
         path = shutil.which(tool)
         info = {"available": bool(path), "path": path or ""}
@@ -73,12 +81,103 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--list-alignments", action="store_true", help="Bis zu 40 Bildabgleichberichte auflisten.")
     parser.add_argument("--latest-batch", action="store_true", help="Gesamtprotokoll des neuesten Stapels anzeigen (ALLE Folgen).")
     parser.add_argument("--list-batches", action="store_true", help="Gesamtprotokolle der letzten Stapel anzeigen.")
+    parser.add_argument("--benchmark-decode", metavar="VIDEO", help="CPU/GPU-Dekodierleistung für ein lokales Video messen (nur lesend).")
+    parser.add_argument("--profile-alignment", nargs=2, metavar=("QUELLE", "MASTER"),
+                        help="Vollständigen Bildabgleich und Laufzeiten für zwei Videos prüfen (kein Export).")
+    parser.add_argument("--profile-workers", choices=(1, 2), type=int, default=1,
+                        help="Video-Decoder für --profile-alignment: 1 oder 2 (NAS bleibt seriell).")
+    parser.add_argument("--profile-decoder", choices=("auto", "none", "ffmpeg", "cuda", "vaapi",
+                                                      "amd-vaapi", "intel-vaapi", "d3d11"), default="auto",
+                        help="Video-Decoding für --profile-alignment, Standard auto.")
+    parser.add_argument("--benchmark-seconds", type=float, default=8.0,
+                        help="Länge des Benchmark-Ausschnitts in Sekunden, Standard: 8.")
+    parser.add_argument("--benchmark-gpu", choices=("auto", "all", "none", "amd-vaapi", "intel-vaapi", "vaapi", "cuda", "d3d11"),
+                        default="auto", help="GPU-Backend im Decoder-Benchmark gezielt wählen.")
     parser.add_argument("--json", action="store_true", help="Diagnose maschinenlesbar als JSON ausgeben (mit --doctor).")
     args = parser.parse_args(argv)
-    if args.json and not (args.doctor or args.latest_alignment or args.list_alignments or args.latest_batch or args.list_batches):
+    if args.json and not (args.doctor or args.latest_alignment or args.list_alignments or args.latest_batch or args.list_batches or args.benchmark_decode or args.profile_alignment):
         parser.error("--json erfordert eine Diagnoseoption.")
-    if sum(bool(value) for value in (args.doctor, args.latest_alignment, args.list_alignments, args.latest_batch, args.list_batches)) > 1:
+    if sum(bool(value) for value in (args.doctor, args.latest_alignment, args.list_alignments, args.latest_batch, args.list_batches, args.benchmark_decode, args.profile_alignment)) > 1:
         parser.error("Bitte nur eine Diagnosefunktion gleichzeitig auswählen.")
+    if args.profile_alignment:
+        from dubsync.core.alignment import align_videos
+        from dubsync.core.alignment_diagnostics import summarize_diagnostic
+        source, master = (Path(value).expanduser().resolve() for value in args.profile_alignment)
+        if not source.is_file() or not master.is_file():
+            print("Mindestens eine Videodatei fehlt oder ist nicht lesbar.", file=sys.stderr)
+            return 2
+        captured: list[dict[str, Any]] = []
+        try:
+            align_videos(str(source), str(master), interval=0.75, max_samples=1200,
+                         hardware_accel=args.profile_decoder,
+                         sampling_workers=args.profile_workers,
+                         frame_cache_enabled=False,
+                         diagnostic_sink=captured.append)
+        except (OSError, ValueError, RuntimeError) as exc:
+            if not args.json:
+                print(f"Analyse fehlgeschlagen: {exc}", file=sys.stderr)
+            if args.json:
+                print(json.dumps(captured[-1] if captured else {"error": str(exc)},
+                                 ensure_ascii=False, indent=2))
+            return 1
+        if not captured:
+            print("Diagnose wurde nicht erstellt.", file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(captured[-1], ensure_ascii=False, indent=2))
+        else:
+            print(summarize_diagnostic(captured[-1]))
+        return 0
+    if args.benchmark_decode:
+        from dubsync.core.alignment import perceptual_hash
+        from dubsync.core.ffmpeg_sampling import (benchmark_decoders, benchmark_decoder_candidates,
+                                                  gpu_decode_candidates, vaapi_render_device)
+        from dubsync.core.probe import probe_media
+        source = Path(args.benchmark_decode).expanduser().resolve()
+        if not source.is_file():
+            print(f"Videodatei nicht gefunden: {source}", file=sys.stderr)
+            return 2
+        if not (0.5 <= args.benchmark_seconds <= 120):
+            parser.error("--benchmark-seconds muss zwischen 0,5 und 120 liegen.")
+        try:
+            info = probe_media(str(source))
+            if args.benchmark_gpu in ("auto", "all"):
+                # The CLI mirrors the real automatic selection: one CPU
+                # reference against all accessible local GPU candidates.
+                outcome = benchmark_decoder_candidates(
+                    str(source), info.duration, 0.75, perceptual_hash,
+                    candidates=gpu_decode_candidates(), seconds=args.benchmark_seconds)
+            else:
+                gpu = (None if args.benchmark_gpu == "none" else
+                       "d3d11va" if args.benchmark_gpu == "d3d11" else
+                       "vaapi" if args.benchmark_gpu in ("amd-vaapi", "intel-vaapi") else args.benchmark_gpu)
+                device = (vaapi_render_device("amd" if args.benchmark_gpu == "amd-vaapi" else
+                                              "intel" if args.benchmark_gpu == "intel-vaapi" else None)
+                          if gpu == "vaapi" else None)
+                if args.benchmark_gpu in ("amd-vaapi", "intel-vaapi") and not device:
+                    print("Kein zugreifbares VAAPI-Rendergerät des gewählten Herstellers gefunden.", file=sys.stderr)
+                    return 2
+                outcome = benchmark_decoders(str(source), info.duration, 0.75,
+                                             perceptual_hash, gpu=gpu, gpu_device=device,
+                                             seconds=args.benchmark_seconds)
+        except (ValueError, OSError, RuntimeError) as exc:
+            print(f"Decoder-Benchmark fehlgeschlagen: {exc}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps({"file": str(source), "measurements": outcome},
+                             ensure_ascii=False, indent=2))
+        else:
+            print(f"Decoder-Benchmark: {source.name} ({args.benchmark_seconds:g} s Ausschnitt)")
+            for name, values in outcome.items():
+                if "error" in values:
+                    print(f"  {name.upper()}: nicht verfügbar – {values['error']}")
+                else:
+                    print(f"  {name.upper()}: {values['frames']} Samples in "
+                          f"{values['seconds']:.3f} s · {values['samples_per_second']} Samples/s")
+            if len(outcome) < 2:
+                print("Keine betriebsfähige GPU erkannt; nur CPU gemessen.")
+            print("GPU-Anforderung bedeutet nicht automatisch GPU-Ausführung oder höhere Geschwindigkeit.")
+        return 0 if outcome.get("cpu", {}).get("frames") else 1
     if args.latest_batch or args.list_batches:
         from dubsync.core.batch_diagnostics import recent_batch_diagnostics, summarize_batch
         paths = recent_batch_diagnostics()

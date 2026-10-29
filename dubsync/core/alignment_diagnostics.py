@@ -20,7 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from .logging_setup import default_log_path
-from .models import AlignmentResult, MediaInfo
+from .models import (AlignmentResult, MediaInfo,
+                     MAX_UNVERIFIED_EDGE_RATIO, MAX_UNVERIFIED_MIDDLE_RATIO)
 
 MAX_REPORTS = 40
 
@@ -116,11 +117,30 @@ def summarize_diagnostic(payload: dict[str, Any]) -> str:
     for key, label in (("sample_source", "Quellvideo-Sampling"), ("sample_master", "Master-Sampling")):
         stage = stages.get(key)
         if isinstance(stage, dict):
-            lines.append(f"{label}: {stage.get('status', 'unbekannt')} · {stage.get('frames_grabbed', '?')} Frames gelesen · "
-                         f"{stage.get('samples_collected', '?')} Bildproben · letzte Position "
-                         f"{stage.get('last_decoded_timestamp_s', '?')}s · {stage.get('retrieve_failures', '?')} Lesefehler")
+            if stage.get("status") == "cache_hit":
+                lines.append(f"{label}: {stage.get('samples_collected', '?')} gültige Bildfingerprints "
+                             "aus dem Datei-geprüften Cache geladen; Szenenabgleich neu ausgeführt.")
+            elif stage.get("backend") == "ffmpeg":
+                lines.append(f"{label}: FFmpeg · {stage.get('samples_collected', '?')} Bildproben · "
+                             f"Decoder-Wunsch {stage.get('selected_gpu_candidate') or stage.get('selected_decoder', '?')} "
+                             "(Hardware-Ausführung nicht nachgewiesen)")
+            else:
+                lines.append(f"{label}: {stage.get('status', 'unbekannt')} · {stage.get('frames_grabbed', '?')} Frames gelesen · "
+                             f"{stage.get('samples_collected', '?')} Bildproben · letzte Position "
+                             f"{stage.get('last_decoded_timestamp_s', '?')}s · {stage.get('retrieve_failures', '?')} Lesefehler")
             if stage.get("timestamp_anomalies"):
                 lines.append(f"  Zeitstempel-Anomalien: {stage['timestamp_anomalies']}")
+    profile = stages.get("pipeline_profile")
+    if isinstance(profile, dict):
+        scheduler = stages.get("sampling_scheduler", {})
+        lines.append(
+            f"Laufzeitprofil: {profile.get('total_wall_seconds', '?')}s insgesamt · "
+            f"Einlesen {profile.get('sampling_wall_seconds', '?')}s · "
+            f"Abgleich {profile.get('matching_wall_seconds', '?')}s · "
+            f"{profile.get('worker_count', 1)} Video-Worker"
+        )
+        if scheduler.get("reason"):
+            lines.append("  Decoder-Plan: " + str(scheduler["reason"]))
     if status == "cancelled":
         origin = decision.get("cancellation_origin")
         translations = {"user_button": "Abbruch-Schaltfläche (Einzelaufgabe)",
@@ -135,6 +155,10 @@ def summarize_diagnostic(payload: dict[str, Any]) -> str:
     else:
         lines.extend(["", "Verfahren: " + str(decision.get("method", "?")),
                       "Versatz: " + str(decision.get("offset_s", "?")) + " s"])
+        piecewise = stages.get("piecewise_fit")
+        if isinstance(piecewise, dict) and piecewise.get("segments"):
+            lines.append(f"Abschnittsweise korrigiert: {len(piecewise['segments'])} unabhängig bestätigte Zeitbereiche.")
+            lines.append("Unpassende Master-Szenen werden in der neuen Audiospur nicht mit fremdem Dialog aufgefüllt.")
         conditions = decision.get("conditions") or {}
         for key, value in conditions.items():
             if isinstance(value, dict):
@@ -191,6 +215,12 @@ class AlignmentDiagnostic:
                              "passed": result.inlier_ratio >= 0.65},
             "coverage": {"value": _number(result.coverage), "minimum": 0.55,
                          "passed": result.coverage >= 0.55},
+            "unverified_middle_ratio": {"value": _number(result.max_unverified_middle_ratio),
+                                        "maximum": MAX_UNVERIFIED_MIDDLE_RATIO,
+                                        "passed": result.max_unverified_middle_ratio <= MAX_UNVERIFIED_MIDDLE_RATIO},
+            "unverified_edge_ratio": {"value": _number(result.max_unverified_edge_ratio),
+                                      "maximum": MAX_UNVERIFIED_EDGE_RATIO,
+                                      "passed": result.max_unverified_edge_ratio <= MAX_UNVERIFIED_EDGE_RATIO},
             "median_hamming": {"value": _number(result.median_hamming), "maximum": 15,
                                "passed": result.median_hamming <= 15},
             "rms_error_s": {"value": _number(result.rms_error),

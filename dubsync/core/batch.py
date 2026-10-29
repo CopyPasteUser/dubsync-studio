@@ -9,6 +9,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Any
 from .batch_diagnostics import BatchDiagnostic
+from .batch_resume import (recipe_id, proof_for, load_resume_report,
+                           verified_resume_entry)
 
 from .alignment import align_videos
 from .cache import AlignmentCache
@@ -193,11 +195,12 @@ def _manual_alignment(result, override: dict) -> object:
         return result
     residuals = [a.target_time - (slope * a.source_time + offset) for a in result.anchors]
     if not residuals:
-        return replace(result, offset=offset, slope=slope)
+        return replace(result, offset=offset, slope=slope, segments=[], manual_segments=False)
     threshold = max(0.75, result.sample_interval * 1.20)
     rms = (sum(value * value for value in residuals) / len(residuals)) ** 0.5
     inlier_ratio = sum(abs(value) <= threshold for value in residuals) / len(residuals)
-    return replace(result, offset=offset, slope=slope, rms_error=rms, inlier_ratio=inlier_ratio)
+    return replace(result, offset=offset, slope=slope, rms_error=rms,
+                   inlier_ratio=inlier_ratio, segments=[], manual_segments=False)
 
 
 def _valid_audio_ordinal(info: MediaInfo, override: dict | None) -> int:
@@ -235,7 +238,10 @@ def batch_export_groups(
     alignment_options: dict | None = None,
     track_overrides: dict[str, dict] | None = None,
     master_overrides: dict[str, str] | None = None,
+    manual_section_sources: set[str] | None = None,
     journal_directory: Path | None = None,
+    resume_from_journal: str | Path | None = None,
+    journal_created: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Safely process grouped episodes and skip untrustworthy automatic alignments."""
     cache = cache or AlignmentCache()
@@ -243,11 +249,21 @@ def batch_export_groups(
     interval = float(alignment_options.get("interval", 0.5))
     max_samples = int(alignment_options.get("max_samples", 1800))
     hardware_accel = str(alignment_options.get("hardware_accel", "auto"))
+    frame_cache_enabled = bool(alignment_options.get("frame_cache_enabled", True))
+    sampling_workers = max(1, min(2, int(alignment_options.get("sampling_workers", 1))))
     # Batch jobs deliberately recompute every alignment: a prior result must never
     # decide which episode is fused into a new output.
     cache_enabled = False
     audio_bitrate_kbps = max(64, min(320, int(alignment_options.get("audio_bitrate_kbps", 128))))
     output_dir = Path(output_directory).expanduser().resolve()
+    resume_recipe = recipe_id(
+        output_directory=str(output_dir), organize_by_series=organize_by_series,
+        alignment_options=alignment_options, roots=roots,
+        root_languages=root_languages, track_overrides=track_overrides,
+        master_overrides=master_overrides)
+    # Resolve and validate the selected run before creating an output folder.
+    resume_entries = (load_resume_report(resume_from_journal, resume_recipe)
+                      if resume_from_journal is not None else [])
     output_dir.mkdir(parents=True, exist_ok=True)
     report = {"exported": [], "skipped": [], "failed": [], "warnings": [], "cancelled": []}
     journal = BatchDiagnostic(groups, alignment_options=alignment_options,
@@ -256,8 +272,16 @@ def batch_export_groups(
                               organize_by_series=organize_by_series,
                               directory=journal_directory,
                               output_directory=str(output_dir))
+    journal.payload["settings"]["resume_recipe_id"] = resume_recipe
+    if resume_from_journal is not None:
+        journal.payload["settings"]["resume_from_run"] = Path(resume_from_journal).name
+    journal.save()
     report["batch_report_path"] = str(journal.path)
     report["batch_run_id"] = journal.payload["run_id"]
+    if journal_created is not None:
+        journal_created(str(journal.path))
+    manual_section_sources = {str(Path(path).expanduser().resolve())
+                              for path in (manual_section_sources or set())}
 
     def finish_report() -> dict[str, Any]:
         journal.finish(cancelled=bool(report["cancelled"]) or cancelled(), report=report)
@@ -340,6 +364,8 @@ def batch_export_groups(
                     source_info.path, master_info.path,
                     interval=interval, cancel_event=cancel_event,
                     max_samples=max_samples, hardware_accel=hardware_accel,
+                    frame_cache_enabled=frame_cache_enabled,
+                    sampling_workers=sampling_workers,
                     source_info=source_info, target_info=master_info,
                     progress=lambda phase, current, amount: announce(
                         dst_index - 1, total,
@@ -528,6 +554,13 @@ def batch_export_groups(
         if len(group.files) < 2:
             skip_episode(index, f"{group.display_name}: nur eine Datei gefunden")
             continue
+        if any(str(Path(path).expanduser().resolve()) in manual_section_sources
+               for path in group.files):
+            detail = (f"{group.display_name}: manuelle Schnittbereiche vorhanden; "
+                      "nur der Einzelexport bietet die erforderliche Bestätigung")
+            skip_episode(index, detail)
+            announce(index, total, "ÜBERSPRUNGEN: " + detail)
+            continue
 
         # A completed output can be resumed/skipped before FFprobe or alignment
         # work starts. This is important when the user reruns a whole-season job.
@@ -536,6 +569,24 @@ def batch_export_groups(
         )
         overwrite = False
         if output.exists():
+            if resume_entries and verified_resume_entry(resume_entries, group, output, resume_recipe):
+                # Proof alone does not establish a decodable output. Always
+                # probe the actual MKV and reject missing video/audio streams.
+                try:
+                    existing_info = probe_media(str(output))
+                    valid_output = bool(existing_info.video and existing_info.audio)
+                except (OSError, MediaToolError, ValueError):
+                    valid_output = False
+                if valid_output:
+                    detail = f"{group.display_name}: durch Stapelprotokoll und aktuelle Ausgabe verifiziert; sicher fortgesetzt"
+                    skip_episode(index, detail)
+                    # Carry the newly verified proof into this run's journal.
+                    # Otherwise a second crash would lose evidence for outputs
+                    # completed *before* the first restart.
+                    journal.resume_proof(index, proof_for(group, output, resume_recipe))
+                    journal.event(index, "verified_resume", "Quellen und Ausgabe erneut geprüft")
+                    announce(index, total, "FORTGESETZT: " + detail)
+                    continue
             if skip_existing:
                 detail = f"{group.display_name}: fertige Ausgabe übersprungen: Ausgabe existiert bereits (Option 'überspringen' aktiviert) ({output})"
                 skip_episode(index, detail)
@@ -657,6 +708,8 @@ def batch_export_groups(
                         info.path, master, interval=interval, progress=subprogress,
                         cancel_event=cancel_event, max_samples=max_samples,
                         hardware_accel=hardware_accel,
+                        frame_cache_enabled=frame_cache_enabled,
+                        sampling_workers=sampling_workers,
                         source_info=info_by_path[str(Path(info.path).resolve())],
                         target_info=master_info,
                         batch_context={"position": index, "total": total,
@@ -696,6 +749,8 @@ def batch_export_groups(
                             info.path, master, interval=interval,
                             progress=subprogress, cancel_event=cancel_event,
                             max_samples=retry_budget, hardware_accel=hardware_accel,
+                            frame_cache_enabled=frame_cache_enabled,
+                            sampling_workers=sampling_workers,
                             source_info=info_by_path[str(Path(info.path).resolve())],
                             target_info=master_info,
                             batch_context={"position": index, "total": total,
@@ -810,6 +865,7 @@ def batch_export_groups(
             report["exported"].append(created)
             journal.conclude(index, "exported", f"{len(tracks)} Audiospuren erfolgreich ausgerichtet",
                              output_filename=Path(created).name)
+            journal.resume_proof(index, proof_for(group, output, resume_recipe))
         except BatchCancelled:
             mark_cancelled(group, index)
             break

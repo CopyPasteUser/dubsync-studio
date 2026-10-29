@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 APP_NAME = "DubSync Studio"
-APP_VERSION = "1.5.14"
+APP_VERSION = "2.0.0b2"
 APP_ID = "dubsync-studio"
 
 

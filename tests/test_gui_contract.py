@@ -46,13 +46,14 @@ class GuiContractTests(unittest.TestCase):
         self.assertIn('automatisch kleinste Videodatei je Episode', self.text)
 
     def test_system_adaptive_profile_and_audio_bitrate_are_connected(self):
-        self.assertIn('addItem("Automatisch – passend zu diesem System", "system")', self.text)
-        self.assertIn('self.audio_bitrate.currentIndexChanged.connect(self._mark_custom)', self.text)
+        self.assertIn('self.preset_combo.addItem(f"Auto – empfiehlt {choice} für diese Hardware", "system")', self.text)
+        self.assertIn('"preset": preset, "auto_system_profile": preset == "system"', self.text)
+        self.assertNotIn('self.audio_bitrate.currentIndexChanged.connect(self._mark_custom)', self.text)
         self.assertIn('"audio_bitrate_kbps": self.performance_settings["audio_bitrate_kbps"]', self.text)
         self.assertIn('audio_bitrate_kbps=self.performance_settings["audio_bitrate_kbps"]', self.text)
 
     def test_stable_release_has_project_save_load_and_job_history(self):
-        self.assertIn('APP_VERSION = "1.5.14"', self.text)
+        self.assertIn('APP_VERSION = "2.0.0b2"', self.text)
         self.assertIn('QAction("Projekt öffnen…", self)', self.text)
         self.assertIn('QAction("Projekt speichern", self)', self.text)
         self.assertIn('def _open_project(self)', self.text)
@@ -69,8 +70,10 @@ class GuiContractTests(unittest.TestCase):
         self.assertIn('def _open_log_file(self)', self.text)
 
     def test_batch_uses_persisted_track_and_master_overrides(self):
-        self.assertIn('track_overrides=dict(self.track_overrides)', self.text)
-        self.assertIn('master_overrides=dict(self.master_overrides)', self.text)
+        self.assertIn('"track_overrides": dict(self.track_overrides)', self.text)
+        self.assertIn('"master_overrides": dict(self.master_overrides)', self.text)
+        self.assertIn('self.batch_queue.enqueue(', self.text)
+        self.assertIn('self.batch_queue.run(', self.text)
         self.assertIn('def _alignment_value_changed(self, *_args)', self.text)
         self.assertIn('def _reset_alignment(self)', self.text)
         self.assertIn('"manual_alignment": bool(row.manual_alignment)', self.text)
@@ -133,10 +136,10 @@ class GuiContractTests(unittest.TestCase):
     def test_workflow_design_and_drag_drop_are_wired(self):
         self.assertIn('class SourceDropList(QListWidget)', self.text)
         self.assertIn('self.root_list.pathsDropped.connect(self._handle_dropped_paths)', self.text)
-        self.assertIn('QLabel("01  QUELLEN")', self.text)
-        self.assertIn('QLabel("02  SYNCHRONISIEREN")', self.text)
-        self.assertIn('QLabel("03  EXPORT")', self.text)
-        self.assertIn('QFrame#workflowStrip', self.text)
+        self.assertIn('QLabel("QUELLEN")', self.text)
+        self.assertIn('QLabel("ABGLEICH")', self.text)
+        self.assertIn('QLabel("EPISODE")', self.text)
+        self.assertIn('QFrame#workflowStrip', (ROOT / 'dubsync/gui/theme.py').read_text())
         self.assertIn('dropHint', self.text)
         self.assertIn('def _source_context_menu(self, position)', self.text)
         self.assertIn('def _open_project_file(self, filename: str)', self.text)

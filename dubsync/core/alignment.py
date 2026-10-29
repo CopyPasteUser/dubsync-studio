@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import math
 import os
+import threading
 from bisect import bisect_left
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,11 +14,55 @@ from typing import Callable
 import cv2
 import numpy as np
 
-from .models import AlignmentResult, Anchor, MediaInfo
+from .models import (AlignmentResult, Anchor, MediaInfo,
+                     MAX_UNVERIFIED_EDGE_RATIO, MAX_UNVERIFIED_MIDDLE_RATIO)
 from .alignment_diagnostics import AlignmentDiagnostic
+from .piecewise import detect_piecewise
 from .probe import probe_media
+from .ffmpeg_sampling import (SamplingBackendError, ffmpeg_sample,
+                              benchmark_decoder_candidates,
+                              gpu_decode_candidates, vaapi_render_device)
+from .frame_cache import FrameSampleCache, source_identity
+from .network import is_network_path
+from .performance import sampling_worker_policy, system_specs
 
 Progress = Callable[[str, int, int], None]
+_BYTE_POPCOUNT = np.fromiter((value.bit_count() for value in range(256)), dtype=np.uint8)
+
+# A process-local *ordering hint*, never a cached verification result. Every new
+# video still runs a fresh CPU/GPU frame comparison before hardware is used.
+_GPU_HINT_LOCK = threading.Lock()
+_GPU_HINTS: dict[tuple[str, tuple[str, ...]], tuple[str, int]] = {}
+
+
+def _gpu_candidates_for_codec(codec: str | None, candidates):
+    if not codec or len(candidates) < 2:
+        return candidates, False
+    key = (codec.lower(), tuple(candidate.key for candidate in candidates))
+    with _GPU_HINT_LOCK:
+        hint = _GPU_HINTS.get(key)
+        if hint is None:
+            return candidates, False
+        winner, uses = hint
+        if uses >= 6:
+            _GPU_HINTS.pop(key, None)  # Full adapter comparison periodically.
+            return candidates, False
+        _GPU_HINTS[key] = (winner, uses + 1)
+    preferred = [candidate for candidate in candidates if candidate.key == winner]
+    return preferred or candidates, bool(preferred)
+
+
+def _remember_gpu_candidate(codec: str | None, candidates, winner: str | None):
+    if not codec or len(candidates) < 2:
+        return
+    key = (codec.lower(), tuple(candidate.key for candidate in candidates))
+    with _GPU_HINT_LOCK:
+        if winner is None:
+            _GPU_HINTS.pop(key, None)
+        else:
+            if len(_GPU_HINTS) >= 32:
+                _GPU_HINTS.pop(next(iter(_GPU_HINTS)))
+            _GPU_HINTS[key] = (winner, 0)
 
 
 class AlignmentError(RuntimeError):
@@ -88,9 +134,109 @@ def _open_capture(path: str, hardware_accel: str, progress: Progress | None, sid
 
 def sample_video(path: str, duration: float, interval: float = 0.5,
                  progress: Progress | None = None, side: str = "Video", cancel_event=None,
-                 hardware_accel: str = "auto", diagnostic: AlignmentDiagnostic | None = None) -> list[FrameSample]:
+                 hardware_accel: str = "auto", diagnostic: AlignmentDiagnostic | None = None,
+                 decode_threads: int | None = None,
+                 video_codec: str | None = None) -> list[FrameSample]:
     if interval < 0.5 or interval > 15:
         raise ValueError("Sampleintervall muss zwischen 0,5 und 15 Sekunden liegen")
+    mode = (hardware_accel or "auto").strip().lower()
+    # FFmpeg scales frames before they cross the process boundary. This avoids
+    # Python/OpenCV handling every full-resolution decoded frame. Auto measures
+    # GPU vs CPU on a short prefix before selecting hardware for long videos.
+    if mode in {"auto", "ffmpeg", "cuda", "vaapi", "amd-vaapi", "intel-vaapi", "d3d11"}:
+        ffmpeg_started = time.monotonic()
+        benchmark = None
+        selected_gpu = None
+        selected_candidate = None
+        gpu_device = None
+        hinted = False
+        use_ffmpeg = mode != "auto"
+        try:
+            if mode == "auto":
+                candidates = gpu_decode_candidates()
+                network_source = is_network_path(path) if candidates and duration >= 45 else False
+                if candidates and duration >= 45 and not network_source:
+                    measured_candidates, hinted = _gpu_candidates_for_codec(video_codec, candidates)
+                    benchmark = benchmark_decoder_candidates(
+                        path, duration, interval, perceptual_hash,
+                        candidates=measured_candidates, cancel_event=cancel_event,
+                        seconds=6.0 if len(measured_candidates) > 1 else 8.0)
+                    cpu = benchmark.get("cpu", {})
+                    cpu_speed = float(cpu.get("samples_per_second", 0))
+                    ranked = []
+                    for candidate in measured_candidates:
+                        accelerated = benchmark.get(candidate.key, {})
+                        gpu_speed = float(accelerated.get("samples_per_second", 0))
+                        if ("frames" in cpu and gpu_speed > cpu_speed * 1.15 and
+                                float(accelerated.get("frame_match_ratio", 0)) >= 0.95 and
+                                int(accelerated.get("median_hamming_to_cpu", 99)) <= 10 and
+                                int(accelerated.get("frames", 0)) >= 4 and
+                                abs(int(accelerated["frames"]) - int(cpu["frames"])) <= 1):
+                            ranked.append((gpu_speed, candidate))
+                    if ranked:
+                        _, winner = max(ranked, key=lambda pair: pair[0])
+                        selected_gpu, gpu_device = winner.accel, winner.device
+                        selected_candidate = winner.key
+                        use_ffmpeg = True
+                        if not hinted:
+                            _remember_gpu_candidate(video_codec, candidates, winner.key)
+                    elif hinted:
+                        _remember_gpu_candidate(video_codec, candidates, None)
+                    elif progress:
+                        progress(f"{side}: Kein geprüfter GPU-Decoder schneller – OpenCV bleibt aktiv", 0, 0)
+                elif candidates and network_source and progress:
+                    progress(f"{side}: NAS-Quelle – mehrfaches Einlesen für GPU-Benchmarks vermieden", 0, 0)
+            else:
+                selected_gpu = None if mode == "ffmpeg" else {
+                    "d3d11": "d3d11va", "amd-vaapi": "vaapi", "intel-vaapi": "vaapi"}.get(mode, mode)
+                if mode in {"amd-vaapi", "intel-vaapi"}:
+                    vendor = "amd" if mode == "amd-vaapi" else "intel"
+                    gpu_device = vaapi_render_device(vendor)
+                    if gpu_device is None:
+                        raise SamplingBackendError(f"Kein zugreifbares {vendor.upper()}-VAAPI-Rendergerät gefunden.")
+                elif selected_gpu == "vaapi":
+                    gpu_device = vaapi_render_device()
+            if use_ffmpeg:
+                if progress:
+                    detail = (f"GPU {selected_candidate or selected_gpu.upper()} angefordert"
+                              if selected_gpu else "CPU über FFmpeg")
+                    progress(f"{side}: {detail} · Frames direkt auf 32×32 reduziert", 0, 0)
+                hashes = ffmpeg_sample(path, duration, interval, perceptual_hash,
+                                       accel=selected_gpu, device=gpu_device, cancel_event=cancel_event,
+                                       progress=progress, side=side, decode_threads=decode_threads)
+                samples = [FrameSample(timestamp, phash) for timestamp, phash in hashes]
+                if diagnostic is not None:
+                    elapsed = time.monotonic() - ffmpeg_started
+                    unique = len({item.phash for item in samples})
+                    diagnostic.stage(
+                        f"sample_{'source' if side == 'Quellvideo' else 'master'}",
+                        status="completed", backend="ffmpeg", requested_hwaccel=mode,
+                        selected_decoder=selected_gpu or "software",
+                        selected_gpu_candidate=selected_candidate,
+                        gpu_hint_used=hinted,
+                        gpu_candidates_measured=len(measured_candidates) if benchmark is not None else 0,
+                        gpu_preference_scope=video_codec if mode == "auto" else None,
+                        render_device_name=Path(gpu_device).name if gpu_device else None,
+                        hardware_execution_verified=False,
+                        # FFmpeg may silently transfer from or fall back to system RAM.
+                        benchmark=benchmark, interval_s=round(interval, 4),
+                        metadata_duration_s=round(duration, 4), samples_collected=len(samples),
+                        first_sample_s=samples[0].time, last_sample_s=samples[-1].time,
+                        elapsed_s=round(elapsed, 4), unique_hashes=unique,
+                        repeated_hash_ratio=round(1 - unique / len(samples), 4),
+                    )
+                return samples
+        except SamplingBackendError as exc:
+            if mode == "auto" and selected_candidate is not None:
+                _remember_gpu_candidate(video_codec, candidates, None)
+            if cancel_event is not None and cancel_event.is_set():
+                raise AlignmentError("Videoanalyse abgebrochen.") from exc
+            if progress:
+                progress(f"{side}: FFmpeg-Sampling nicht nutzbar – OpenCV-Fallback ({str(exc)[:110]})", 0, 0)
+            if diagnostic is not None:
+                diagnostic.stage("sampling_backend_fallback", side=side,
+                                 attempted_decoder=selected_gpu or "software",
+                                 error=str(exc)[:500])
     cap, hardware_requested = _open_capture(path, hardware_accel, progress, side)
     samples: list[FrameSample] = []
     fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
@@ -213,6 +359,140 @@ def sample_video(path: str, duration: float, interval: float = 0.5,
     return samples
 
 
+def _sample_with_cache(path: str, duration: float, interval: float,
+                       progress: Progress | None, side: str, cancel_event,
+                       hardware_accel: str, diagnostic: AlignmentDiagnostic | None,
+                       cache: FrameSampleCache | None,
+                       decode_threads: int | None = None,
+                       video_codec: str | None = None) -> list[FrameSample]:
+    """Reuse only frame hashes; always rerun identity checks and alignment."""
+    identity = None
+    stage = "source" if side == "Quellvideo" else "master"
+    if cache is not None:
+        try:
+            identity = source_identity(path)
+            cached = cache.get(identity, duration, interval, hardware_accel)
+        except OSError:
+            cached = None
+        if cached is not None:
+            if cancel_event is not None and cancel_event.is_set():
+                raise AlignmentError("Videoanalyse abgebrochen.")
+            # A source modified while reading from the cache must not enter
+            # a fresh safety evaluation with potentially stale fingerprints.
+            try:
+                stable = source_identity(path) == identity
+            except OSError:
+                stable = False
+            if not stable:
+                raise AlignmentError("Quelldatei während des Fingerprint-Cache-Zugriffs verändert.")
+            if progress:
+                progress(f"{side}: {len(cached)} Bildproben aus geprüftem Cache", len(cached), len(cached))
+            if diagnostic is not None:
+                diagnostic.stage(f"sample_{stage}", status="cache_hit", backend="fingerprint_cache",
+                                 samples_collected=len(cached), interval_s=round(interval, 4),
+                                 metadata_duration_s=round(duration, 4))
+            return [FrameSample(stamp, value) for stamp, value in cached]
+
+    samples = sample_video(path, duration, interval, progress, side,
+                           cancel_event, hardware_accel, diagnostic, decode_threads,
+                           video_codec)
+    if identity is not None and cache is not None:
+        try:
+            after = source_identity(path)
+        except OSError:
+            # Cache failure is not a decoder failure.
+            after = None
+        if after is not None and after != identity:
+            raise AlignmentError("Quelldatei während der Videoanalyse verändert; Analyse abgebrochen.")
+        stored = (after is not None and
+                  cache.put(identity, duration, interval, [(x.time, x.phash) for x in samples],
+                            hardware_accel))
+        if diagnostic is not None:
+            diagnostic.stage(f"sample_cache_{stage}", hit=False, stored=stored,
+                             samples_collected=len(samples))
+    return samples
+
+
+class _CombinedCancel:
+    """Stop the sibling decoder when one worker fails, without changing user events."""
+
+    def __init__(self, external, internal: threading.Event):
+        self.external = external
+        self.internal = internal
+
+    def is_set(self) -> bool:
+        return self.internal.is_set() or (self.external is not None and self.external.is_set())
+
+
+def _sample_video_pair(source_path: str, target_path: str,
+                       source_duration: float, target_duration: float,
+                       interval: float, progress: Progress | None, cancel_event,
+                       hardware_accel: str, diagnostic: AlignmentDiagnostic | None,
+                       frame_cache_enabled: bool, requested_workers: int,
+                       source_codec: str | None = None, target_codec: str | None = None
+                       ) -> tuple[list[FrameSample], list[FrameSample]]:
+    """Read independent sources concurrently only when the resource policy permits."""
+    specs = system_specs()
+    workers, reason = sampling_worker_policy(source_path, target_path,
+                                             requested_workers, hardware_accel, specs)
+    if diagnostic is not None:
+        diagnostic.stage("sampling_scheduler", requested_workers=requested_workers,
+                         effective_workers=workers, reason=reason)
+    started = time.monotonic()
+    tasks = (("source", source_path, source_duration, "Quellvideo", source_codec),
+             ("master", target_path, target_duration, "Referenzvideo", target_codec))
+    # Initialize SQLite schema serially; concurrent initialization may briefly
+    # lock the database even though subsequent per-worker connections are safe.
+    caches = {key: FrameSampleCache() for key, *_ in tasks} if frame_cache_enabled else {}
+    results: dict[str, list[FrameSample]] = {}
+    timings: dict[str, float] = {}
+    local_stop = threading.Event()
+    stop = _CombinedCancel(cancel_event, local_stop)
+    progress_lock = threading.Lock()
+    decode_threads = (max(1, min(12, int(specs.get("logical_cpus", 2)) // 2))
+                      if workers == 2 else None)
+
+    def run(task):
+        key, path, duration, side, codec = task
+        began = time.monotonic()
+
+        def report(name: str, done: int, total: int) -> None:
+            if progress is not None:
+                # User-supplied callbacks need not be reentrant. Qt signal
+                # emissions remain safe from these background worker threads.
+                with progress_lock:
+                    progress(name, done, total)
+
+        # Separate in-memory caches, short-lived SQLite connections on disk.
+        cache = caches.get(key)
+        samples = _sample_with_cache(path, duration, interval, report if progress else None,
+                                     side, stop, hardware_accel, diagnostic, cache,
+                                     decode_threads, codec)
+        return key, samples, time.monotonic() - began
+
+    if workers == 1:
+        for task in tasks:
+            key, samples, elapsed = run(task)
+            results[key], timings[key] = samples, elapsed
+    else:
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="dubsync-sample") as executor:
+            futures = [executor.submit(run, task) for task in tasks]
+            try:
+                for future in as_completed(futures):
+                    key, samples, elapsed = future.result()
+                    results[key], timings[key] = samples, elapsed
+            except BaseException:
+                local_stop.set()
+                raise
+    if diagnostic is not None:
+        diagnostic.stage("sample_runtime",
+                         source_seconds=round(timings["source"], 4),
+                         master_seconds=round(timings["master"], 4),
+                         wall_seconds=round(time.monotonic() - started, 4),
+                         effective_workers=workers)
+    return results["source"], results["master"]
+
+
 def _sequence_alignment(source: list[FrameSample], target: list[FrameSample],
                         progress: Progress | None = None, cancel_event=None,
                         diagnostic: AlignmentDiagnostic | None = None) -> list[Anchor]:
@@ -222,14 +502,12 @@ def _sequence_alignment(source: list[FrameSample], target: list[FrameSample],
     gap_cost = 0.205
     max_match_distance = 18
     distances = np.empty((n, m), dtype=np.uint8)
-    target_hashes = [sample.phash for sample in target]
+    target_hashes = np.asarray([sample.phash for sample in target], dtype=np.uint64)
     for i, src in enumerate(source):
         if cancel_event is not None and cancel_event.is_set():
             raise AlignmentError("Frameabgleich abgebrochen.")
-        distances[i] = np.fromiter(
-            ((src.phash ^ value).bit_count() for value in target_hashes),
-            dtype=np.uint8, count=m,
-        )
+        xor_bytes = np.bitwise_xor(target_hashes, np.uint64(src.phash)).view(np.uint8)
+        distances[i] = _BYTE_POPCOUNT[xor_bytes].reshape(m, 8).sum(axis=1, dtype=np.uint8)
 
     dp = np.empty((n + 1, m + 1), dtype=np.float32)
     trace = np.zeros((n + 1, m + 1), dtype=np.uint8)
@@ -237,6 +515,7 @@ def _sequence_alignment(source: list[FrameSample], target: list[FrameSample],
     dp[0, :] = np.arange(m + 1, dtype=np.float32) * gap_cost
     trace[1:, 0] = 2  # source-only frame
     trace[0, 1:] = 3  # target-only frame
+    column_costs = np.arange(m + 1, dtype=np.float64) * gap_cost
 
     for i in range(1, n + 1):
         if cancel_event is not None and cancel_event.is_set():
@@ -245,21 +524,22 @@ def _sequence_alignment(source: list[FrameSample], target: list[FrameSample],
         current = dp[i]
         previous_trace = trace[i]
         distance_row = distances[i - 1]
-        # The left-transition depends on the just-computed cell in this row, so
-        # compute columns in order instead of a vector expression over unfilled cells.
-        for j in range(1, m + 1):
-            diagonal = float(previous[j - 1]) + float(distance_row[j - 1]) / 64.0
-            skip_source = float(previous[j]) + gap_cost
-            skip_target = float(current[j - 1]) + gap_cost
-            if diagonal <= skip_source and diagonal <= skip_target:
-                current[j] = diagonal
-                previous_trace[j] = 1
-            elif skip_source <= skip_target:
-                current[j] = skip_source
-                previous_trace[j] = 2
-            else:
-                current[j] = skip_target
-                previous_trace[j] = 3
+        # dp[j] = min(diagonal[j], above[j], dp[j-1] + gap_cost).
+        # Subtracting j*gap_cost makes the last term a prefix minimum, so one
+        # NumPy scan replaces the Python O(m) inner loop without changing the DP.
+        diagonal = previous[:-1].astype(np.float64) + distance_row / 64.0
+        above = previous[1:].astype(np.float64) + gap_cost
+        best = np.minimum(diagonal, above)
+        candidates = np.empty(m + 1, dtype=np.float64)
+        candidates[0] = current[0]
+        candidates[1:] = best - column_costs[1:]
+        np.minimum.accumulate(candidates, out=candidates)
+        current[1:] = candidates[1:] + column_costs[1:]
+        left = current[:-1].astype(np.float64) + gap_cost
+        previous_trace[1:] = np.where(
+            (diagonal <= above) & (diagonal <= left), 1,
+            np.where(above <= left, 2, 3),
+        )
         if progress and (i % 30 == 0 or i == n):
             progress("Frameabgleich", i, n)
 
@@ -308,6 +588,33 @@ def _sequence_alignment(source: list[FrameSample], target: list[FrameSample],
     return clean
 
 
+def _feature_candidate_pairs(source: list[FrameSample], target: list[FrameSample],
+                             cancel_event=None) -> list[tuple[int, int, int, float, float]]:
+    """Find the same two strongest visual matches per source frame as the scalar path.
+
+    Each vector is only as wide as the target sample list; no quadratic matrix
+    is retained in memory. Equal distances still prefer the earlier target.
+    """
+    target_hashes = np.asarray([sample.phash for sample in target], dtype=np.uint64)
+    target_times = [sample.time for sample in target]
+    candidates: list[tuple[int, int, int, float, float]] = []
+    for source_index, src in enumerate(source):
+        if cancel_event is not None and cancel_event.is_set():
+            raise AlignmentError("Frameabgleich abgebrochen.")
+        xor = np.bitwise_xor(target_hashes, np.uint64(src.phash)).view(np.uint8)
+        distances = _BYTE_POPCOUNT[xor].reshape(len(target), 8).sum(axis=1, dtype=np.uint8)
+        matching = np.flatnonzero(distances <= 16)
+        if not len(matching):
+            continue
+        # lexsort makes the old stable (distance, target position) ordering
+        # explicit, including collisions and repeated cartoon frames.
+        best = matching[np.lexsort((matching, distances[matching]))[:2]]
+        for target_index in best:
+            candidates.append((source_index, int(target_index), int(distances[target_index]),
+                               src.time, target_times[target_index]))
+    return candidates
+
+
 def _feature_anchor_fallback(source: list[FrameSample], target: list[FrameSample],
                             interval: float, cancel_event=None,
                             diagnostic: AlignmentDiagnostic | None = None) -> list[Anchor]:
@@ -322,25 +629,14 @@ def _feature_anchor_fallback(source: list[FrameSample], target: list[FrameSample
             diagnostic.stage("feature_fallback", status="insufficient_samples",
                              source_sample_count=len(source), target_sample_count=len(target))
         return []
-    target_hashes = [sample.phash for sample in target]
-    candidates: list[tuple[int, int, int, float, float]] = []
-    for source_index, src in enumerate(source):
-        if cancel_event is not None and cancel_event.is_set():
-            raise AlignmentError("Frameabgleich abgebrochen.")
-        best: list[tuple[int, int]] = []
-        for target_index, target_hash in enumerate(target_hashes):
-            distance = (src.phash ^ target_hash).bit_count()
-            if distance <= 16:
-                best.append((distance, target_index))
-        best.sort(key=lambda item: item[0])
-        for distance, target_index in best[:2]:
-            candidates.append((source_index, target_index, distance,
-                               src.time, target[target_index].time))
+    candidate_started = time.monotonic()
+    candidates = _feature_candidate_pairs(source, target, cancel_event)
+    candidate_scan_seconds = round(time.monotonic() - candidate_started, 4)
     if len(candidates) < 8:
         if diagnostic is not None:
             diagnostic.stage("feature_fallback", status="insufficient_visual_candidates",
                              candidate_count=len(candidates), min_candidate_count=8,
-                             max_hamming=16)
+                             max_hamming=16, candidate_scan_seconds=candidate_scan_seconds)
         return []
 
     tolerance = max(0.85, interval * 1.5)
@@ -369,38 +665,65 @@ def _feature_anchor_fallback(source: list[FrameSample], target: list[FrameSample
                 offset = left[4] - slope * left[3]
                 hypotheses.add((round(slope, 6), round(offset, 3)))
 
+    # Each source contributes at most two candidates. Keep their indices in
+    # source order so every affine hypothesis can be evaluated without building
+    # and sorting thousands of Python dictionaries/lists.
+    first = np.full(len(source), -1, dtype=np.int32)
+    second = np.full(len(source), -1, dtype=np.int32)
+    for position, (source_index, *_rest) in enumerate(candidates):
+        if first[source_index] < 0:
+            first[source_index] = position
+        else:
+            second[source_index] = position
+    first_safe = np.maximum(first, 0)
+    second_safe = np.maximum(second, 0)
+    target_indices = np.asarray([item[1] for item in candidates], dtype=np.int32)
+    distances = np.asarray([item[2] for item in candidates], dtype=np.uint8)
+    source_times = np.asarray([item[3] for item in candidates], dtype=np.float64)
+    target_times = np.asarray([item[4] for item in candidates], dtype=np.float64)
+    first_distance = distances[first_safe]
+    second_distance = distances[second_safe]
+
+    scoring_started = time.monotonic()
     best_model: tuple[tuple[int, float, float], float, float] | None = None
-    for slope, offset in hypotheses:
-        chosen: dict[int, tuple[int, int, float]] = {}
-        for source_index, target_index, distance, source_time, target_time in candidates:
-            residual = abs(target_time - (slope * source_time + offset))
-            if residual > tolerance:
-                continue
-            previous = chosen.get(source_index)
-            quality = (distance, residual)
-            if previous is None or quality < (previous[0], previous[2]):
-                chosen[source_index] = (distance, target_index, residual)
-        ordered = sorted((idx, value[1], value[0], value[2])
-                         for idx, value in chosen.items())
-        unique: list[tuple[int, int, int, float]] = []
-        last_target = -1
-        for item in ordered:
-            if item[1] > last_target:
-                unique.append(item)
-                last_target = item[1]
-        if not unique:
+    # Sorted hypotheses make equal-scoring choices reproducible across runs.
+    for slope, offset in sorted(hypotheses):
+        if cancel_event is not None and cancel_event.is_set():
+            raise AlignmentError("Frameabgleich abgebrochen.")
+        residuals = np.abs(target_times - (slope * source_times + offset))
+        first_residual = residuals[first_safe]
+        second_residual = residuals[second_safe]
+        valid_first = (first >= 0) & (first_residual <= tolerance)
+        valid_second = (second >= 0) & (second_residual <= tolerance)
+        choose_first = valid_first & (
+            ~valid_second | (first_distance < second_distance) |
+            ((first_distance == second_distance) & (first_residual <= second_residual))
+        )
+        selected = np.where(choose_first, first, np.where(valid_second, second, -1))
+        selected = selected[selected >= 0]
+        if not len(selected):
             continue
-        median_distance = float(np.median([item[2] for item in unique]))
-        median_residual = float(np.median([item[3] for item in unique]))
-        score = (len(unique), -median_distance, -median_residual)
+        # Greedily retain a target only if it exceeds the last retained one.
+        # That is exactly the strict prefix-maximum condition, but vectorized.
+        selected_targets = target_indices[selected]
+        prefix_max = np.maximum.accumulate(selected_targets)
+        keep = np.empty(len(selected), dtype=np.bool_)
+        keep[0] = True
+        keep[1:] = selected_targets[1:] > prefix_max[:-1]
+        unique = selected[keep]
+        score = (len(unique), -float(np.median(distances[unique])),
+                 -float(np.median(residuals[unique])))
         if best_model is None or score > best_model[0]:
             best_model = (score, slope, offset)
+    hypothesis_scoring_seconds = round(time.monotonic() - scoring_started, 4)
 
     if best_model is None:
         if diagnostic is not None:
             diagnostic.stage("feature_fallback", status="no_plausible_time_model",
                              candidate_count=len(candidates), pool_count=len(pool),
                              hypotheses_tested=len(hypotheses),
+                             candidate_scan_seconds=candidate_scan_seconds,
+                             hypothesis_scoring_seconds=hypothesis_scoring_seconds,
                              max_hamming=16, time_tolerance_s=round(tolerance, 4))
         return []
     _, best_slope, best_offset = best_model
@@ -425,6 +748,8 @@ def _feature_anchor_fallback(source: list[FrameSample], target: list[FrameSample
         diagnostic.stage("feature_fallback", status="matched",
                          candidate_count=len(candidates), pool_count=len(pool),
                          hypotheses_tested=len(hypotheses), selected_anchors=len(anchors),
+                         candidate_scan_seconds=candidate_scan_seconds,
+                         hypothesis_scoring_seconds=hypothesis_scoring_seconds,
                          selected_slope=round(best_slope, 7), selected_offset_s=round(best_offset, 4),
                          max_hamming=16, time_tolerance_s=round(tolerance, 4),
                          median_hamming=round(float(np.median([a.hamming_distance for a in anchors])), 4) if anchors else None)
@@ -762,7 +1087,7 @@ def _evaluate_anchors(anchors: list[Anchor], source_path: str, target_path: str,
     if visual_distinct_hashes < 8:
         warnings.append("Wenige unterschiedliche Bildinhalte; wiederholte Standbilder erlauben keinen sicheren automatischen Abgleich.")
 
-    return AlignmentResult(
+    result = AlignmentResult(
         source_path=os.path.abspath(source_path), target_path=os.path.abspath(target_path),
         slope=slope, offset=offset, anchors=anchors, confidence=confidence,
         inlier_ratio=inlier_ratio, coverage=coverage, median_hamming=median_hamming,
@@ -772,12 +1097,18 @@ def _evaluate_anchors(anchors: list[Anchor], source_path: str, target_path: str,
         max_samples=int(max_samples), hardware_accel=hardware_accel,
         visual_distinct_hashes=int(visual_distinct_hashes),
     )
+    if result.max_unverified_middle_ratio > MAX_UNVERIFIED_MIDDLE_RATIO:
+        result.warnings.append("Langer ungeprüfter Abschnitt zwischen Bildankern; automatische Synchronisierung nicht sicher.")
+    if result.max_unverified_edge_ratio > MAX_UNVERIFIED_EDGE_RATIO:
+        result.warnings.append("Episodenanfang oder -ende nicht ausreichend durch Bildanker bestätigt; automatische Synchronisierung nicht sicher.")
+    return result
 
 
 def _candidate_metrics(result: AlignmentResult | None) -> dict:
     if result is None:
         return {"present": False, "reason": "fewer_than_four_anchors"}
     return {"present": True, "safe": result.safe_for_automatic_export,
+            "sections": len(result.segments),
             "anchors": len(result.anchors), "coverage": round(result.coverage, 5),
             "inlier_ratio": round(result.inlier_ratio, 5),
             "median_hamming": round(result.median_hamming, 4),
@@ -798,7 +1129,9 @@ def _align_videos_impl(source_path: str, target_path: str, interval: float = 0.5
                  max_samples: int = 1800, hardware_accel: str = "auto",
                  source_info: MediaInfo | None = None,
                  target_info: MediaInfo | None = None,
-                 diagnostic: AlignmentDiagnostic | None = None) -> AlignmentResult:
+                 diagnostic: AlignmentDiagnostic | None = None,
+                 frame_cache_enabled: bool = True,
+                 sampling_workers: int = 1) -> AlignmentResult:
     """Map source video time to target/master video time using perceptual frame alignment.
 
     Callers running a batch may pass already-probed metadata to avoid launching
@@ -806,8 +1139,12 @@ def _align_videos_impl(source_path: str, target_path: str, interval: float = 0.5
     """
     if cancel_event is not None and cancel_event.is_set():
         raise AlignmentError("Analyse abgebrochen.")
+    probe_started = time.monotonic()
     expected_source = os.path.abspath(source_path)
     expected_target = os.path.abspath(target_path)
+    metadata_reused = (source_info is not None and target_info is not None and
+                       os.path.abspath(source_info.path) == expected_source and
+                       os.path.abspath(target_info.path) == expected_target)
     if source_info is None or os.path.abspath(source_info.path) != expected_source:
         source_info = probe_media(source_path)
     if target_info is None or os.path.abspath(target_info.path) != expected_target:
@@ -819,9 +1156,11 @@ def _align_videos_impl(source_path: str, target_path: str, interval: float = 0.5
 
     if diagnostic is not None:
         diagnostic.metadata(source_info, target_info)
+        diagnostic.stage("probe_runtime", wall_seconds=round(time.monotonic() - probe_started, 4),
+                         metadata_reused=metadata_reused)
     if not 200 <= int(max_samples) <= 5000:
         raise ValueError("max_samples muss zwischen 200 und 5000 liegen")
-    if hardware_accel not in {"auto", "none", "vaapi", "qsv", "d3d11", "drm"}:
+    if hardware_accel not in {"auto", "none", "ffmpeg", "cuda", "vaapi", "amd-vaapi", "intel-vaapi", "qsv", "d3d11", "drm"}:
         raise ValueError("Unbekannter Hardware-Decoding-Modus")
     # Bound the O(n*m) monotone matcher. This is the main memory/performance knob:
     # 1400 samples needs ~14 MB of working arrays; 2400 samples needs ~35 MB.
@@ -832,13 +1171,12 @@ def _align_videos_impl(source_path: str, target_path: str, interval: float = 0.5
                          max_samples=int(max_samples),
                          expected_source_samples=math.ceil(source_info.duration / effective_interval),
                          expected_master_samples=math.ceil(target_info.duration / effective_interval))
-    started_sampling = time.monotonic()
-    source_samples = sample_video(source_path, source_info.duration, effective_interval, progress, "Quellvideo", cancel_event, hardware_accel, diagnostic)
-    source_done = time.monotonic()
-    target_samples = sample_video(target_path, target_info.duration, effective_interval, progress, "Referenzvideo", cancel_event, hardware_accel, diagnostic)
-    if diagnostic is not None:
-        diagnostic.stage("sample_runtime", source_seconds=round(source_done - started_sampling, 4),
-                         master_seconds=round(time.monotonic() - source_done, 4))
+    source_samples, target_samples = _sample_video_pair(
+        source_path, target_path, source_info.duration, target_info.duration,
+        effective_interval, progress, cancel_event, hardware_accel, diagnostic,
+        frame_cache_enabled, sampling_workers,
+        source_info.video[0].codec_name, target_info.video[0].codec_name,
+    )
     # First test for the common case: same episode/video timeline, different audio
     # track or re-encode. A same-timestamp visual check is both faster and more
     # reliable than forcing these files through global sequence alignment.
@@ -881,17 +1219,34 @@ def _align_videos_impl(source_path: str, target_path: str, interval: float = 0.5
                                  visual_distinct_hashes=min_distinct)
                 if len(anchors) >= 4 else None)
     primary_quality = len(anchors) / max(1, sample_count)
-    # Previously this fallback was never tried if global DP produced plenty of
-    # anchors with inconsistent timing. That can hide the actual correct mapping.
+    selected, method = sequence, "sequence"
     fallback_needed = (sequence is None or not sequence.safe_for_automatic_export)
+    if fallback_needed:
+        # Test visually confirmed cuts before the more expensive feature-vote
+        # fallback. Most genuine edit differences are already evident in DP.
+        piecewise = detect_piecewise(
+            anchors, {item.time: item.phash for item in source_samples},
+            expected_source, expected_target, source_info.duration,
+            target_info.duration, effective_interval, sample_count,
+            interval, max_samples, hardware_accel,
+        )
+        if diagnostic is not None:
+            diagnostic.stage("piecewise_candidate",
+                             accepted=piecewise is not None,
+                             segment_count=len(piecewise.segments) if piecewise else 0,
+                             source_anchor_count=len(anchors))
+        if piecewise is not None:
+            selected, method = piecewise, "piecewise_verified"
+            fallback_needed = False
     if diagnostic is not None:
         diagnostic.stage("fallback_decision", sequence_anchors=len(anchors),
                          sequence_coverage=round(primary_quality, 5),
                          sequence_safe=sequence.safe_for_automatic_export if sequence else False,
                          sequence_inlier_ratio=round(sequence.inlier_ratio, 5) if sequence else None,
                          sequence_rms_s=round(sequence.rms_error, 5) if sequence else None,
-                         fallback_started=fallback_needed, trigger="unsafe_sequence" if fallback_needed else "not_needed")
-    selected, method = sequence, "sequence"
+                         fallback_started=fallback_needed,
+                         trigger=("unsafe_sequence" if fallback_needed else
+                                  "piecewise_verified" if selected and selected.segments else "not_needed"))
     fallback = []
     if fallback_needed:
         if progress:
@@ -924,8 +1279,18 @@ def _align_videos_impl(source_path: str, target_path: str, interval: float = 0.5
     if selected is None:
         raise AlignmentError("Zu wenige passende Bildanker gefunden. Prüfe, ob beide Dateien dieselbe Schnittfassung enthalten.")
     # Record residual details only for the chosen mapping.
-    if diagnostic is not None:
+    if diagnostic is not None and not selected.segments:
         _robust_affine(selected.anchors, effective_interval, diagnostic)
+    elif diagnostic is not None:
+        diagnostic.stage("piecewise_fit", segments=[{
+            "source_start_s": round(s.source_start, 4),
+            "source_end_s": round(s.source_end, 4),
+            "master_start_s": round(s.target_start, 4),
+            "master_end_s": round(s.target_end, 4),
+            "slope": round(s.slope, 7), "anchors": s.anchor_count,
+            "median_hamming": round(s.median_hamming, 3),
+            "rms_error_s": round(s.rms_error, 4),
+        } for s in selected.segments])
     if diagnostic is not None:
         # Sparse clusters may indicate an episode that only shares an intro/outro.
         selected_times = [a.source_time for a in selected.anchors]
@@ -944,13 +1309,16 @@ def align_videos(source_path: str, target_path: str, interval: float = 0.5,
                  source_info: MediaInfo | None = None,
                  target_info: MediaInfo | None = None,
                  batch_context: dict | None = None,
-                 diagnostic_sink=None) -> AlignmentResult:
+                 diagnostic_sink=None,
+                 frame_cache_enabled: bool = True,
+                 sampling_workers: int = 1) -> AlignmentResult:
     """Run visual alignment and always persist bounded per-pair diagnostics.
 
     The diagnostic reporter cannot change the computed result or turn an unsafe
     alignment into an acceptable export. It also records failed/cancelled runs.
     """
     diagnostic = AlignmentDiagnostic(source_path, target_path, interval, max_samples, hardware_accel)
+    profiled_since = time.monotonic()
     if batch_context:
         # Store only explicit scalar metadata, never full paths or raw user data.
         diagnostic.stage(
@@ -964,6 +1332,7 @@ def align_videos(source_path: str, target_path: str, interval: float = 0.5,
         result = _align_videos_impl(
             source_path, target_path, interval, progress, cancel_event,
             max_samples, hardware_accel, source_info, target_info, diagnostic,
+            frame_cache_enabled, sampling_workers,
         )
         selected = next((event["method"] for event in diagnostic.payload["events"]
                          if event.get("event") == "method_selected"), "unknown")
@@ -977,6 +1346,20 @@ def align_videos(source_path: str, target_path: str, interval: float = 0.5,
         diagnostic.failure(exc)
         raise
     finally:
+        elapsed = time.monotonic() - profiled_since
+        stages = diagnostic.payload["stages"]
+        probe_s = float(stages.get("probe_runtime", {}).get("wall_seconds", 0.0))
+        sampling_s = float(stages.get("sample_runtime", {}).get("wall_seconds", 0.0))
+        matching_s = max(0.0, elapsed - probe_s - sampling_s) if sampling_s else 0.0
+        measured = {"probe": probe_s, "sampling": sampling_s, "matching": matching_s}
+        included = {key: value for key, value in measured.items() if value > 0}
+        diagnostic.stage("pipeline_profile", total_wall_seconds=round(elapsed, 4),
+                         probe_wall_seconds=round(probe_s, 4),
+                         sampling_wall_seconds=round(sampling_s, 4),
+                         matching_wall_seconds=round(matching_s, 4),
+                         longest_phase=max(included, key=included.get) if included else "unavailable",
+                         complete=diagnostic.payload["decision"].get("status") in ("safe", "unsafe"),
+                         worker_count=stages.get("sampling_scheduler", {}).get("effective_workers", 1))
         diagnostic.save()
         if diagnostic_sink is not None:
             try:

@@ -49,12 +49,28 @@ class AlignmentDiagnosticsTests(unittest.TestCase):
         data = json.loads(path.read_text())
         self.assertIn(data["decision"]["status"], ("unsafe", "safe"))
         self.assertIn("confidence", data["decision"]["conditions"])
+        self.assertIn("unverified_middle_ratio", data["decision"]["conditions"])
         self.assertEqual(data["requested"]["max_samples"], 1200)
         self.assertEqual(data["files"]["source"]["filename"], "Language-DE-E02.mkv")
         self.assertNotIn(self.folder.name, path.read_text())
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
         self.assertEqual(latest_diagnostic(), path)
+
+    def test_long_unverified_middle_is_explained_and_blocks_auto_export(self):
+        from dubsync.core.alignment import _evaluate_anchors
+        times = list(range(300)) + list(range(700, 1000))
+        anchors = [Anchor(float(i), float(i), 0) for i in times]
+        result = _evaluate_anchors(anchors, self.source, self.target,
+                                   media(self.source, 1000), media(self.target, 1000),
+                                   1.0, 1.0, 1200, "none", 1000, visual_distinct_hashes=600)
+        self.assertGreater(result.confidence, 0.62)
+        self.assertEqual(result.coverage, 0.6)
+        self.assertFalse(result.safe_for_automatic_export)
+        self.assertTrue(any("ungeprüfter Abschnitt" in warning for warning in result.warnings))
+        diagnostic = AlignmentDiagnostic(self.source, self.target, 1.0, 1200, "none")
+        diagnostic.complete(result, "sequence")
+        self.assertIn("unverified_middle_ratio", diagnostic.payload["decision"]["failed_conditions"])
 
     def test_failure_report_does_not_expose_full_media_paths(self):
         diagnostic = AlignmentDiagnostic(self.source, self.target, 1.0, 1200, "none")

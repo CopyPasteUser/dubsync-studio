@@ -38,7 +38,8 @@ class FullBatchDiagnosticsTests(unittest.TestCase):
                          100 if small else 200, [self.video, self.audio], 1, 1, 0)
 
     def alignment(self, source, master, safe):
-        anchors = [Anchor(i * 10.0, i * 10.0 + 110.0, 2) for i in range(60)]
+        # Cover the full common episode; a dense first half alone is not safe.
+        anchors = [Anchor(i * 22.0, i * 22.0 + 110.0, 2) for i in range(60)]
         return AlignmentResult(
             source_path=source, target_path=master, slope=1.0, offset=110.0,
             anchors=anchors, confidence=.95 if safe else .2, inlier_ratio=.98,

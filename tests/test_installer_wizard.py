@@ -25,7 +25,7 @@ class InstallerWizardTests(unittest.TestCase):
             [sys.executable, str(WIZARD), "--version"], capture_output=True, text=True, timeout=10
         )
         self.assertEqual(version_result.returncode, 0, version_result.stderr)
-        self.assertIn("1.5.14", version_result.stdout)
+        self.assertIn("2.0.0b2", version_result.stdout)
         release = subprocess.run(
             [sys.executable, str(ROOT / "scripts" / "release_check.py")],
             cwd=ROOT, capture_output=True, text=True, timeout=15,

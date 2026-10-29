@@ -14,7 +14,8 @@ from dubsync.core.performance import (
     normalize_performance_settings,
     settings_for_preset,
     supported_hardware_modes,
-    apply_cpu_thread_limit, system_specs, recommended_profile,
+    apply_cpu_thread_limit, system_specs, recommended_profile, sampling_worker_policy,
+    auto_decoder_summary,
 )
 
 
@@ -39,10 +40,10 @@ class PerformanceSettingTests(unittest.TestCase):
         }), patch("dubsync.core.performance._hardware_decoder_available", return_value=False):
             settings = default_performance_settings()
         self.assertEqual(settings["preset"], "system")
-        self.assertEqual(settings["max_samples"], 400)
-        self.assertEqual(settings["sample_interval"], 1.25)
+        self.assertEqual(settings["max_samples"], 1200)
+        self.assertEqual(settings["sample_interval"], 0.75)
         self.assertEqual(settings["cpu_threads"], 1)
-        self.assertEqual(settings["hardware_accel"], "none")
+        self.assertEqual(settings["hardware_accel"], "auto")
 
     def test_invalid_performance_options_are_clamped(self):
         settings = normalize_performance_settings({
@@ -62,14 +63,98 @@ class PerformanceSettingTests(unittest.TestCase):
         self.assertEqual(settings["audio_bitrate_kbps"], 320)
         self.assertFalse(settings["cache_enabled"])
 
-    def test_presets_trade_sample_budget_for_runtime(self):
+    def test_presets_change_resource_budget_but_never_matching_inputs(self):
         fast = settings_for_preset("fast")
         balanced = settings_for_preset("balanced")
         quality = settings_for_preset("quality")
-        self.assertLess(fast["max_samples"], balanced["max_samples"])
-        self.assertLess(balanced["max_samples"], quality["max_samples"])
+        for key in ("max_samples", "sample_interval", "audio_bitrate_kbps"):
+            self.assertEqual(fast[key], balanced[key])
+            self.assertEqual(balanced[key], quality[key])
+        self.assertLessEqual(fast["cpu_threads"], balanced["cpu_threads"])
+        self.assertLessEqual(balanced["cpu_threads"], quality["cpu_threads"])
         custom = normalize_performance_settings({"preset": "custom"})
         self.assertEqual(custom["preset"], "custom")
+
+    def test_saved_resource_preset_is_recalculated_on_a_different_machine(self):
+        old = {"preset": "quality", "cpu_threads": 2, "probe_workers": 1,
+               "sampling_workers": 1, "sample_interval": 0.5,
+               "max_samples": 1800, "audio_bitrate_kbps": 160}
+        with patch("dubsync.core.performance.system_specs", return_value={
+            "physical_cores": 4, "logical_cpus": 8, "ram_gib": 16,
+        }):
+            updated = normalize_performance_settings(old)
+        self.assertEqual(updated["cpu_threads"], 7)
+        self.assertEqual(updated["probe_workers"], 4)
+        self.assertEqual(updated["sampling_workers"], 2)
+        self.assertFalse(updated["auto_system_profile"])
+        self.assertEqual((updated["sample_interval"], updated["max_samples"],
+                          updated["audio_bitrate_kbps"]), (0.5, 1800, 160))
+
+    def test_custom_resource_budget_stays_manual_and_is_clamped(self):
+        with patch("dubsync.core.performance.system_specs", return_value={
+            "physical_cores": 2, "logical_cpus": 4, "ram_gib": 8,
+        }):
+            custom = normalize_performance_settings({
+                "preset": "custom", "cpu_threads": 99,
+                "probe_workers": 8, "sampling_workers": 8,
+            })
+        self.assertEqual(custom["cpu_threads"], 4)
+        self.assertEqual(custom["probe_workers"], 8)
+        self.assertEqual(custom["sampling_workers"], 2)
+
+    def test_intel_igpu_is_visible_as_auto_candidate_not_claimed_verified(self):
+        from dubsync.core.ffmpeg_sampling import DecoderCandidate
+        with patch("dubsync.core.ffmpeg_sampling.gpu_decode_candidates", return_value=[
+            DecoderCandidate("intel-vaapi@renderD128", "vaapi", "/dev/dri/renderD128"),
+        ]):
+            summary = auto_decoder_summary()
+        self.assertIn("Intel iGPU", summary)
+        self.assertIn("Benchmark", summary)
+
+    def test_quality_profile_enables_parallel_sampling_only_on_strong_hardware(self):
+        strong = {"physical_cores": 8, "logical_cpus": 12, "ram_gib": 24}
+        weak = {"physical_cores": 3, "logical_cpus": 4, "ram_gib": 6}
+        self.assertEqual(settings_for_preset("quality", strong)["sampling_workers"], 2)
+        self.assertEqual(settings_for_preset("quality", weak)["sampling_workers"], 1)
+        self.assertEqual(settings_for_preset("fast", strong)["sampling_workers"], 1)
+
+    def test_old_fast_settings_cannot_inherit_quality_parallelism(self):
+        with patch("dubsync.core.performance.system_specs", return_value={
+            "physical_cores": 12, "logical_cpus": 16, "ram_gib": 32, "gpu_vendors": [],
+        }), patch("dubsync.core.performance._hardware_decoder_available", return_value=False):
+            self.assertEqual(normalize_performance_settings({"preset": "fast"})["sampling_workers"], 1)
+
+    def test_parallel_sampling_never_reads_network_mounts_concurrently(self):
+        strong = {"logical_cpus": 12, "ram_gib": 24}
+        with patch("dubsync.core.network.is_network_path", side_effect=lambda path: path.startswith("/nas")):
+            count, reason = sampling_worker_policy("/local/source.mkv", "/nas/master.mkv",
+                                                   2, "ffmpeg", strong)
+            self.assertEqual(count, 1)
+            self.assertIn("NAS", reason)
+            count, _ = sampling_worker_policy("/local/source.mkv", "/local/master.mkv",
+                                              2, "ffmpeg", strong)
+            self.assertEqual(count, 2)
+
+    def test_auto_gpu_benchmark_is_not_distorted_by_parallel_decode(self):
+        strong = {"logical_cpus": 12, "ram_gib": 24}
+        with (patch("dubsync.core.network.is_network_path", return_value=False),
+              patch("dubsync.core.ffmpeg_sampling.likely_gpu_accel", return_value="vaapi")):
+            count, reason = sampling_worker_policy("source.mkv", "master.mkv", 2, "auto", strong)
+        self.assertEqual(count, 1)
+        self.assertIn("GPU", reason)
+
+    def test_parallel_sampling_is_clamped_when_resources_are_low(self):
+        weak = {"logical_cpus": 2, "ram_gib": 6}
+        with patch("dubsync.core.network.is_network_path", return_value=False):
+            self.assertEqual(sampling_worker_policy("s", "m", 2, "ffmpeg", weak)[0], 1)
+
+    def test_intel_vaapi_is_shown_only_with_matching_render_node(self):
+        with (patch("dubsync.core.performance.sys.platform", "linux"),
+              patch("dubsync.core.ffmpeg_sampling.ffmpeg_hardware_accels", return_value=frozenset({"vaapi"})),
+              patch("dubsync.core.ffmpeg_sampling.vaapi_render_device",
+                    side_effect=lambda vendor=None: "/dev/dri/renderD128" if vendor == "intel" else None)):
+            self.assertIn("intel-vaapi", supported_hardware_modes())
+            self.assertNotIn("amd-vaapi", supported_hardware_modes())
 
     def test_hardware_modes_always_keep_safe_fallbacks(self):
         modes = supported_hardware_modes()

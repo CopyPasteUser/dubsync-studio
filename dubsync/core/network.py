@@ -58,6 +58,11 @@ def network_mount_for_path(path: str | os.PathLike[str], mounts: Iterable[dict[s
 
 
 def is_network_path(path: str | os.PathLike[str]) -> bool:
+    # UNC paths on Windows must be throttled even though /proc/self/mounts is
+    # unavailable. Support forward-slash UNC syntax as well.
+    raw = os.fspath(path)
+    if raw.startswith(("\\\\", "//")):
+        return True
     return network_mount_for_path(path) is not None
 
 

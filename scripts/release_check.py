@@ -38,11 +38,10 @@ def main() -> int:
             errors.append(f"Version metadata mismatch: {name} (expected {version})")
     if not re.search(rf"^# DubSync Studio {re.escape(version)}$", readme, re.MULTILINE):
         errors.append("README header does not match package version")
-    if pyproject["project"].get("classifiers") and not any(
-        classifier == "Development Status :: 5 - Production/Stable"
-        for classifier in pyproject["project"]["classifiers"]
-    ):
-        errors.append("Package is not marked Production/Stable")
+    expected_status = ("Development Status :: 4 - Beta" if re.search(r"b\d+$", version)
+                       else "Development Status :: 5 - Production/Stable")
+    if expected_status not in pyproject["project"].get("classifiers", []):
+        errors.append(f"Package status does not match the version: expected {expected_status}")
     for path in [*(ROOT / "dubsync").rglob("*.py"), ROOT / "installer_wizard.py"]:
         try:
             ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

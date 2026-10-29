@@ -126,6 +126,39 @@ def normalize_project_payload(value: Any) -> dict[str, Any]:
         group_key = _string(group_key, "Episodenschlüssel", limit=2048)
         master_overrides[group_key] = _string(master_path, "Bildmaster-Pfad")
 
+    manual_raw = value.get("manual_segments", [])
+    if not isinstance(manual_raw, list) or len(manual_raw) > 500:
+        raise ProjectFileError("Manuelle Schnittbereiche sind ungültig oder zu zahlreich.")
+    manual_segments: list[dict[str, Any]] = []
+    for record in manual_raw:
+        if not isinstance(record, dict):
+            raise ProjectFileError("Ungültiger manueller Schnittbereichseintrag.")
+        source = _string(record.get("source"), "Quellpfad des Schnittbereichs")
+        master = _string(record.get("master"), "Masterpfad des Schnittbereichs")
+        raw_sections = record.get("segments")
+        if not isinstance(raw_sections, list) or not 1 <= len(raw_sections) <= 12:
+            raise ProjectFileError("Manuelle Schnittbereiche müssen 1 bis 12 Einträge enthalten.")
+        signatures = {}
+        for name in ("source_size", "master_size", "source_mtime_ns", "master_mtime_ns"):
+            number = record.get(name)
+            if not isinstance(number, int) or isinstance(number, bool) or not 0 <= number <= 2**64 - 1:
+                raise ProjectFileError(f"Ungültige Dateisignatur: {name}.")
+            signatures[name] = number
+        sections = []
+        for item in raw_sections:
+            if not isinstance(item, dict) or not isinstance(item.get("enabled"), bool):
+                raise ProjectFileError("Manueller Schnittbereich hat ungültige Felder.")
+            times = {}
+            for name in ("source_start", "source_end", "target_start", "target_end"):
+                number = item.get(name)
+                if (not isinstance(number, (int, float)) or isinstance(number, bool)
+                        or not math.isfinite(number) or not 0 <= float(number) <= 1000000):
+                    raise ProjectFileError(f"Ungültiger Zeitwert für {name}.")
+                times[name] = float(number)
+            sections.append({**times, "enabled": item["enabled"]})
+        manual_segments.append({"source": source, "master": master, **signatures,
+                                "segments": sections})
+
     return {
         "roots": roots,
         "root_languages": rules,
@@ -135,6 +168,7 @@ def normalize_project_payload(value: Any) -> dict[str, Any]:
         "performance": clean_performance,
         "track_overrides": track_overrides,
         "master_overrides": master_overrides,
+        "manual_segments": manual_segments,
     }
 
 

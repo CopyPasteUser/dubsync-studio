@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
-from .models import AlignmentResult, TrackChoice
+from .models import AlignmentResult, MediaInfo, TrackChoice, validate_timeline_layout
 from .languages import normalize_language_code
 from .probe import MediaToolError, probe_media, require_media_tools
 
@@ -19,6 +19,44 @@ class ExportError(RuntimeError):
     pass
 
 
+def _verify_mux_output(master: MediaInfo, checked: MediaInfo, added_audio: int) -> None:
+    """Reject missing or changed copied streams before promoting the output."""
+    if checked.video_streams != 1:
+        raise ExportError("Exportprüfung fehlgeschlagen: genau ein Master-Videostream erwartet.")
+    original_video, output_video = master.video[0], checked.video[0]
+    if (original_video.codec_name != "unknown" and
+            output_video.codec_name != original_video.codec_name):
+        raise ExportError("Exportprüfung fehlgeschlagen: Video-Codec wurde verändert.")
+    if ((original_video.width and output_video.width != original_video.width) or
+            (original_video.height and output_video.height != original_video.height)):
+        raise ExportError("Exportprüfung fehlgeschlagen: Videoauflösung wurde verändert.")
+    if (original_video.fps and output_video.fps and
+            abs(output_video.fps / original_video.fps - 1.0) > 0.005):
+        raise ExportError("Exportprüfung fehlgeschlagen: Videoframerate wurde verändert.")
+
+    expected_audio = master.audio_streams + added_audio
+    if checked.audio_streams != expected_audio:
+        raise ExportError(f"Exportprüfung: erwartet {expected_audio} Audiospuren, gefunden {checked.audio_streams}.")
+    for source, output in zip(master.audio, checked.audio):
+        if source.codec_name != "unknown" and output.codec_name != source.codec_name:
+            raise ExportError("Exportprüfung fehlgeschlagen: bestehender Audio-Codec wurde verändert.")
+        if source.channels and output.channels != source.channels:
+            raise ExportError("Exportprüfung fehlgeschlagen: bestehendes Audiokanal-Layout wurde verändert.")
+    if any(stream.codec_name != "aac" for stream in checked.audio[master.audio_streams:]):
+        raise ExportError("Exportprüfung fehlgeschlagen: neue Audiospur hat einen unerwarteten Codec.")
+    if checked.subtitle_streams != master.subtitle_streams:
+        raise ExportError("Exportprüfung fehlgeschlagen: Untertitelspuren fehlen.")
+    if any(source.codec_name != output.codec_name
+           for source, output in zip((s for s in master.streams if s.codec_type == "subtitle"),
+                                     (s for s in checked.streams if s.codec_type == "subtitle"))):
+        raise ExportError("Exportprüfung fehlgeschlagen: Untertitel-Codec wurde verändert.")
+    if sum(s.codec_type == "attachment" for s in checked.streams) != sum(
+            s.codec_type == "attachment" for s in master.streams):
+        raise ExportError("Exportprüfung fehlgeschlagen: Dateianhänge fehlen.")
+    if abs(checked.duration - master.duration) > max(2.0, master.duration * 0.005):
+        raise ExportError(f"Exportprüfung: Laufzeit weicht vom Master ab ({checked.duration:.2f}s statt {master.duration:.2f}s).")
+
+
 def _language_code(value: str | None) -> str:
     code = normalize_language_code(value)
     return code if len(code) == 3 else "und"
@@ -26,6 +64,47 @@ def _language_code(value: str | None) -> str:
 
 def _filter_number(value: float) -> str:
     return f"{value:.9f}".rstrip("0").rstrip(".") or "0"
+
+
+def _piecewise_audio_filters(input_index: int, audio_ordinal: int, label: str,
+                             alignment: AlignmentResult, master_duration: float) -> list[str]:
+    """Render enabled cuts without spreading source audio over unmatched scenes."""
+    active = [segment for segment in alignment.segments if segment.enabled]
+    count = len(active)
+    if count == 1:
+        part = active[0]
+        duration = part.target_end - part.target_start
+        fade = min(0.012, duration / 4)
+        return [
+            f"[{input_index}:a:{audio_ordinal}]aresample=48000,"
+            f"atrim=start={_filter_number(part.source_start)}:end={_filter_number(part.source_end)},"
+            f"asetpts=PTS-STARTPTS,atempo={_filter_number(1.0 / part.slope)},"
+            f"atrim=duration={_filter_number(duration)},asetpts=PTS-STARTPTS,"
+            f"afade=t=in:st=0:d={_filter_number(fade)},"
+            f"afade=t=out:st={_filter_number(duration - fade)}:d={_filter_number(fade)},"
+            f"adelay={max(0, round(part.target_start * 1000))}:all=1,"
+            f"apad,atrim=duration={_filter_number(master_duration)}[{label}]"
+        ]
+    sources = [f"{label}source{index}" for index in range(count)]
+    outputs = [f"{label}part{index}" for index in range(count)]
+    steps = [f"[{input_index}:a:{audio_ordinal}]aresample=48000,asplit={count}"
+             + "".join(f"[{item}]" for item in sources)]
+    for index, part in enumerate(active):
+        duration = part.target_end - part.target_start
+        fade = min(0.012, duration / 4)
+        steps.append(
+            f"[{sources[index]}]atrim=start={_filter_number(part.source_start)}:"
+            f"end={_filter_number(part.source_end)},asetpts=PTS-STARTPTS,"
+            f"atempo={_filter_number(1.0 / part.slope)},"
+            f"atrim=duration={_filter_number(duration)},asetpts=PTS-STARTPTS,"
+            f"afade=t=in:st=0:d={_filter_number(fade)},"
+            f"afade=t=out:st={_filter_number(duration - fade)}:d={_filter_number(fade)},"
+            f"adelay={max(0, round(part.target_start * 1000))}:all=1[{outputs[index]}]"
+        )
+    steps.append("".join(f"[{item}]" for item in outputs)
+                 + f"amix=inputs={count}:duration=longest:normalize=0,"
+                   f"apad,atrim=duration={_filter_number(master_duration)}[{label}]")
+    return steps
 
 
 def export_multilingual(
@@ -80,6 +159,12 @@ def export_multilingual(
             raise ExportError(
                 f"Synchronisation für {source.name} ist unsicher. Prüfe die Warnungen oder erlaube den Export ausdrücklich."
             )
+        if track.alignment.segments:
+            issue = validate_timeline_layout(track.alignment.segments,
+                                             track.alignment.source_duration,
+                                             master_info.duration)
+            if issue:
+                raise ExportError(f"Ungültige Abschnittszuordnung für {source.name}: {issue}")
         if not 0.5 <= track.alignment.slope <= 2.0:
             raise ExportError(f"Unplausibler Zeitmaßstab für {source.name}: {track.alignment.slope:.5f}")
 
@@ -112,24 +197,25 @@ def export_multilingual(
         input_index = index + 1
         input_args.extend(["-i", source])
         align = track.alignment
-        slope = align.slope
-        tempo = 1.0 / slope
-        offset = align.offset
-        # Mapping: target_time = slope * source_time + offset.
-        # Positive offset means leading silence; negative offset means the early
-        # source audio maps to negative target time and must be trimmed.
-        source_skip = max(0.0, -offset / slope)
-        delay_ms = max(0, int(round(offset * 1000.0)))
         audio_ordinal = max(0, int(track.audio_ordinal))
         label = f"dub{index}"
-        chain = (
-            f"[{input_index}:a:{audio_ordinal}]aresample=48000,"
-            f"atrim=start={_filter_number(source_skip)},asetpts=PTS-STARTPTS,"
-            f"atempo={_filter_number(tempo)},"
-            f"adelay={delay_ms}:all=1,apad,"
-            f"atrim=duration={_filter_number(master_info.duration)}[{label}]"
-        )
-        filters.append(chain)
+        if align.segments:
+            filters.extend(_piecewise_audio_filters(input_index, audio_ordinal, label,
+                                                     align, master_info.duration))
+        else:
+            slope, offset = align.slope, align.offset
+            tempo = 1.0 / slope
+            # Negative offset trims early source audio; positive offset adds silence.
+            source_skip = max(0.0, -offset / slope)
+            delay_ms = max(0, int(round(offset * 1000.0)))
+            chain = (
+                f"[{input_index}:a:{audio_ordinal}]aresample=48000,"
+                f"atrim=start={_filter_number(source_skip)},asetpts=PTS-STARTPTS,"
+                f"atempo={_filter_number(tempo)},"
+                f"adelay={delay_ms}:all=1,apad,"
+                f"atrim=duration={_filter_number(master_info.duration)}[{label}]"
+            )
+            filters.append(chain)
 
         out_audio_index = master_audio_count + index
         language = _language_code(track.language)
@@ -152,14 +238,10 @@ def export_multilingual(
         output_audio_index = master_audio_count + index
         command += [f"-c:a:{output_audio_index}", "aac", f"-b:a:{output_audio_index}", f"{audio_bitrate_kbps}k"]
     command += metadata_args
-    if master_audio_count:
-        command += ["-disposition:a:0", "default"]
-    else:
-        command += ["-disposition:a:0", "default"]
+    command += ["-disposition:a:0", "default"]
     command += ["-max_interleave_delta", "0", "-f", "matroska", str(temporary)]
     if filters:
         # filter_complex must appear after inputs; it is inserted before map options.
-        input_count_position = 1 + (len(input_args) // 2) * 2
         # Since the final command is assembled from options, safely insert directly
         # after all `-i` pairs and before maps.
         first_map = command.index("-map")
@@ -209,18 +291,7 @@ def export_multilingual(
         if progress:
             progress(98, "Prüfe exportierte Datei …")
         checked = probe_media(str(temporary))
-        expected_audio = master_audio_count + len(selected)
-        if not checked.video:
-            raise ExportError("Exportprüfung fehlgeschlagen: Videostream fehlt.")
-        if checked.audio_streams != expected_audio:
-            raise ExportError(
-                f"Exportprüfung: erwartet {expected_audio} Audiospuren, gefunden {checked.audio_streams}."
-            )
-        difference = abs(checked.duration - master_info.duration)
-        if difference > max(2.0, master_info.duration * 0.005):
-            raise ExportError(
-                f"Exportprüfung: Laufzeit weicht vom Master ab ({checked.duration:.2f}s statt {master_info.duration:.2f}s)."
-            )
+        _verify_mux_output(master_info, checked, len(selected))
 
         if output.exists() and not overwrite:
             raise ExportError(f"Die Ausgabedatei existiert inzwischen: {output}")

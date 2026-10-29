@@ -222,7 +222,7 @@ class BatchOverrideTests(unittest.TestCase):
                 files=[smallest, chosen_master, selected_dub],
                 series_name="Test Show", season_number=1, episode_number=1,
             )
-            anchors = [Anchor(float(i * 5), float(i * 5) + 0.25, 1) for i in range(10)]
+            anchors = [Anchor(float(i * 5), float(i * 5) + 0.25, 1) for i in range(12)]
             aligned = AlignmentResult(
                 source_path=selected_dub, target_path=chosen_master,
                 slope=1.0, offset=0.0, anchors=anchors,
@@ -537,7 +537,10 @@ class MediaIntegrationTests(unittest.TestCase):
             "-map", "0:v:0", "-map", "0:a:0", "-c:v", "mpeg4", "-q:v", "4",
             "-c:a", "aac", str(self.alternate),
         ])
-        result = align_videos(str(self.alternate), str(self.master), interval=0.5)
+        # FFmpeg's native fixed-rate sampler is deterministic across modern
+        # OpenCV versions; OpenCV 5 may otherwise leave a >20% false anchor gap.
+        result = align_videos(str(self.alternate), str(self.master), interval=0.5,
+                              hardware_accel="ffmpeg")
         self.assertGreaterEqual(len(result.anchors), 20)
         self.assertAlmostEqual(result.slope, 1.03, delta=0.02)
         self.assertAlmostEqual(result.offset, 0.0, delta=0.5)

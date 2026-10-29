@@ -167,6 +167,7 @@ class BatchDiagnostic:
                 "slope": _finite_number(result.slope),
                 "mapped_overlap_ratio": _finite_number(result.mapped_overlap_ratio),
                 "anchor_count": len(result.anchors),
+                "verified_segments": len(result.segments),
                 "distinct_hashes": result.visual_distinct_hashes,
                 "warnings": list(result.warnings),
             }
@@ -191,6 +192,12 @@ class BatchDiagnostic:
         entry.update(status=status, stage="finished", reason=self._safe_reason(reason),
                      finished_utc=_now(), output_filename=output_filename)
         self.event(position, "finished", status)
+
+    def resume_proof(self, position: int, proof: dict | None) -> None:
+        """Only materialize a proof for completed, verifiable export files."""
+        if proof is not None:
+            self.episode(position)["resume_proof"] = proof
+            self.save()
 
     def finish(self, *, cancelled: bool = False, report: dict | None = None) -> None:
         entries = self.payload["episodes"]

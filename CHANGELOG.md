@@ -1,3 +1,196 @@
+# 2.0.0b2 · Adaptive Hardwareprofile und Studio-Verifikation (2026-10-29)
+
+- Hardwarebezogene Empfehlungen für Leicht/Mittel/Stark und Auto anhand CPU,
+  verfügbarer RAM-/Worker-Budgets und erkannter Decoderkandidaten. Die
+  Synchronisations- und Export-Sicherheitskriterien werden durch das Profil
+  nicht gelockert.
+- Separate UI-Demonstration der Hardwareauswahl sowie neue reproduzierbare
+  Qt-Offscreen-Screenshots mit ausdrücklich synthetischen Beispieldaten.
+- Erweiterte Tests für Bildanker-Review, erneutes Einplanen, sichere
+  Wiederaufnahme und Treiber-/Decoder-Fehlerpfade.
+- Neue README-Galerie mit echten Demo-UI-Screenshots und einer eigens erstellten,
+  ausdrücklich nicht-funktionalen Titelillustration.
+- Weiterhin Beta: physische GPU-Ausführung, NAS-Unterbrechungen und der
+  plattformübergreifende reale Desktop-Einsatz sind nicht freigegeben.
+
+# 2.0.0b1 · Studio-Workbench und Stapelzentrale (2026-10-29)
+
+- Der neue native Drei-Spalten-Arbeitsplatz verbindet Episodenwahl, sichtbaren
+  Abgleich-Monitor und den vorhandenen mehrsprachigen Track-/Schnitteditor.
+  Es gibt keine zweite Export- oder Projektlogik: alle ursprünglichen
+  Sicherheitsprüfungen und Dialoge bleiben maßgeblich.
+- Eine selbst gezeichnete Zeitachse zeigt Bildanker, zugeordnete Segmente,
+  verifizierte Lücken und Positionskontrolle mit Zoom, Maus und Tastatur.
+  Separate Framevergleich-Ansicht lädt zwei Standbilder **nur nach Klick**;
+  ein fehlender Match wird nicht durch einen beliebigen Quellframe ersetzt.
+  FFmpeg läuft mit Dateiprotokoll-Schranke, Timeout und ohne Schreibzugriffe.
+- Die persistente SQLite-Warteschlange erhält eine integrierte Stapelzentrale
+  mit sichtbaren Jobs, Zuständen und explizitem Fortsetzen, Neuplanen sowie
+  sequenzieller Abarbeitung. Die früheren Modal- und Berichtsfunktionen
+  bleiben verfügbar. Kein Auto-Start und keine stillschweigende Freigabe
+  bereits vorhandener Ausgabedateien.
+- Hallmark-geführte Desktop-Gestaltung verfeinert die bestehende
+  Graphit-/Sea-Glass-Oberfläche, ergänzt einen 2.0-Beta-Indikator,
+  `Strg+F` zur Episodensuche und eigenständige Scrollbereiche. Keine
+  dekorativen Bilder, eingebetteten Browser oder zusätzlichen Abhängigkeiten.
+- Offline-Layout-Screenshots sind explizit synthetisch gekennzeichnet. 2.0-Beta
+  ersetzt keine Freigabe an echten NAS-/GPU- und Windows/Linux-Systemen.
+
+# 1.6.0b1 · Persistente Stapel-Warteschlange (2026-10-29)
+
+- Neue SQLite-Warteschlange speichert die konkrete Episodenzuordnung,
+  Ausgaberegeln, Profilparameter, Status und Journalreferenz. Unterbrochene
+  Aufträge bleiben nach App-Neustart sichtbar und müssen ausdrücklich neu
+  gestartet werden. Parallel laufende POSIX-Prozesse werden beim Recover nicht
+  als abgestürzt umklassifiziert.
+- Exportoberfläche kann sofort ausführen oder nur einplanen; Warteschlangen-
+  Dialog mit Fortsetzen, Problem-Episoden erneut einplanen und sequenzieller
+  Abarbeitung. Kein Auto-Start beim App-Start.
+- Wiederanlauf aktiviert `skip_existing` und deaktiviert `overwrite_existing`;
+  bestehende MKVs gelten nur nach Quellen-/Rezept-/Ausgabeprüfung als erledigt.
+  Bei manuell ausgewählten Vorprotokollen bleibt die ursprüngliche Rezeptur.
+  Bereits verifizierte Ausgaben behalten ihre Prüfnachweise auch nach einem
+  zweiten oder dritten unterbrochenen Wiederanlauf.
+- CPU-Last und verfügbarer RAM begrenzen die Parallelität konservativ. Der
+  wirksame Ressourcenplan wird für Wiederaufnahme gespeichert; GPU-/NAS-
+  Entscheidungen bleiben durch die bisherige Medienprüfung geschützt.
+- Neue SQLite-, Prozess-, Wiederanlauf-, Ressourcen- und GUI-Regressionstests.
+  Realgerät-/NAS-Validierung offen, daher Beta-Status.
+
+# Unreleased · Synchronisierungssicherheit, Exportprüfung und Leistung
+
+## Zusammengefasster Roadmap-Durchlauf (2026-10-29)
+
+- Automatisches GPU-Decoding merkt sich kurzfristig den nach gemessener Leistung
+  besten Decoder je Videocodec und vorhandener Adapterkombination. Bei **jeder**
+  neuen lokalen Datei werden weiterhin frische CPU/GPU-Bildproben verglichen;
+  nach sechs Folgemessungen erfolgt ein erneuter vollständiger Adaptervergleich.
+  GPU-Fehler verwerfen die Präferenz. Keine persistente Exportfreigabe.
+- Explizite Fortsetzung eines früheren Serien-Stapels aus einem JSON-Protokoll:
+  vergleicht das vollständige Exportrezept, alle Quelldatei-Signaturen, Zielpfad,
+  Ausgabe-Signatur und aktuelle Videospur-/Audiospur-Probe. Beschädigte und
+  abweichende Ausgaben werden nicht als erfolgreich verifiziert. Bestehende
+  Überschreib-/Überspringen-Einstellungen bleiben wirksam.
+- Schnittbereich-Editor mit markiertem Zeitbereich, Sekundeninspektor, aktiviertem
+  Split/Entfernen nur im gültigen Zustand, Rückgängig/Wiederholen, Tastenkürzeln
+  und Bestätigung beim Verwerfen. Manuell veränderte Segmente bleiben für
+  automatische Exporte ungeprüft.
+- Neue Regressionstests für GPU-Favoriten pro Codec, sichere Wiederaufnahme,
+  Quellen-/Ausgabeänderungen und Undo/Redo. Dokumentierte 2.0-Releasetore in
+  `docs/ROADMAP_2_0.md`. Keine echte GPU-/NAS-Validierung in dieser Umgebung.
+
+## Vektorisierter Szenen-Fallback (2026-10-29)
+
+- Alternative Bildanker-Suche bei abweichenden Intros und Szenenschnitten nutzt
+  begrenzte NumPy-Hamming-Vektoren, statt jedes Framepaar in Python zu prüfen.
+- Affine Zeitmodell-Hypothesen werden mit vektorisierten Residuen,
+  Kandidatenauswahl und streng monotonen Prefix-Maxima bewertet. Die
+  bestehenden Distanz-/Zeitgrenzen, höchstens zwei Kandidaten pro Quellframe
+  und alle Export-Freigaberegeln bleiben unverändert.
+- Gleich bewertete Hypothesen werden jetzt deterministisch entschieden;
+  Diagnose zeichnet Such- und Modellbewertungszeiten getrennt auf.
+- Ein unabhängiger skalarer Referenzalgorithmus prüft das Verhalten bei
+  Wiederholungen, leicht veränderten Fingerprints, Intros und Drift.
+
+## Automatische GPU-Konkurrenzmessung (2026-10-29)
+
+- Erkennung einzelner zugänglicher AMD-/Intel-VAAPI-Rendernodes auf Hybrid-
+  Systemen sowie CUDA/D3D11VA-Kandidaten. Auto vergleicht bei längeren lokalen
+  Videos maximal vier Kandidaten mit einem gemeinsam gemessenen CPU-Pfad.
+- Ausgewählt wird nur der schnellste **inhaltlich geprüfte** GPU-Decoder:
+  Bildfingerprint-Ähnlichkeit, medianer Hamming-Abstand, ausreichende Probenzahl
+  und mindestens 15 % Mehrdurchsatz gegenüber FFmpeg-CPU sind Pflicht.
+- Verhindert wiederholte CPU-Kurzläufe für jeden einzelnen GPU-Kandidaten.
+  Auf NAS-Quellen werden zusätzliche GPU-Benchmarks vermieden.
+- `--benchmark-gpu auto`/`all` zeigt alle erkannten Kandidaten und Vergleichswerte;
+  `--doctor` und Systemdiagnose listen die erkannten Auto-Kandidaten.
+- Zusätzliche Regressionstests für Hybrid-Erkennung, mehrere Decoder, falsch
+  decodierte Frames, Treiberfehler und NAS-Benchmark-Bypass.
+
+## Integrierte GPU-Decoder und messbarer Analysepfad (2026-10-29)
+
+- Explizite Intel-VAAPI-Auswahl über die Intel-DRM-Rendernode, auch auf
+  hybriden Systemen mit AMD-dGPU; die vorhandene AMD-VAAPI-Auswahl deckt
+  dedizierte und integrierte AMD-Grafik ab. CLI-Benchmark unterstützt
+  `--benchmark-gpu intel-vaapi`.
+- Starke Analyseprofile erlauben zwei lokale Decoder pro Quell-/Master-Paar.
+  Laufzeitpolicy begrenzt dies anhand von CPU/RAM, bekannten NAS-Mounts
+  sowie exklusiver Auto-GPU-Messung; pro FFmpeg-Worker wird das Threadbudget
+  angepasst. Fehler beenden den anderen Worker kooperativ.
+- Vollständiges Phasenprofil in der Bildabgleichdiagnose: Metadaten,
+  Videofingerprints, Matching, effektive Decoderzahl und längste Phase.
+  `--profile-alignment QUELLE MASTER` vergleicht ohne Medienschreibzugriffe
+  serielles und paralleles Einlesen (mit `--profile-workers {1,2}`).
+- Regeltests für CPU-/RAM-/NAS-Grenzen, Intel-/AMD-Hybridgeräte, parallelen
+  Abbruch und lokale FFmpeg-Medien ergänzt. GPU und NAS physisch nicht verfügbar.
+
+## GPU-Auswahl für AMD und persistente Frame-Fingerprints (2026-10-29)
+
+- Radeon-VAAPI auf Linux kann ein identifiziertes AMD-Rendergerät auswählen,
+  auch auf hybriden Intel/AMD-Systemen. Normaler VAAPI-Modus und D3D11VA auf
+  Windows bleiben erhalten; Decoder-Fehler führen zum bewährten CPU-Fallback.
+- `--benchmark-gpu amd-vaapi` misst den expliziten AMD-Pfad, ohne aus einem
+  FFmpeg-Interface auf tatsächliche GPU-Ausführung zu schließen.
+- Neuer begrenzter SQLite-Cache für **einzelne Video-Bildfingerprints**, mit
+  frischer Inhaltsprüfung über elf verteilte Dateifenster, Änderungs-/Profil-
+  invalidierung, Größenlimit und defensivem Umgang mit beschädigten Einträgen.
+  Keine Wiederverwendung alter Alignment-Ergebnisse: Episodenidentität, Anker,
+  Qualitätsprüfung und Exportfreigabe werden jedes Mal neu ermittelt.
+- Separater, standardmäßig aktiver Cache-Schalter im Leistungsdialog;
+  `frame_cache_enabled` wird an Einzel- und Serienanalyse durchgereicht.
+- Regressionstests für persistente Treffer, Wechsel von Episoden/Decodermodus,
+  veränderte Dateien, beschädigte Einträge, Abbruch und AMD-Hybridgeräte ergänzt.
+
+## Hardwarebewusstes FFmpeg-Sampling (2026-10-29)
+
+- Neuer FFmpeg-Decoderpfad für 32×32-Graustufen-Samples direkt aus dem Filtergraphen,
+  mit CUDA/NVDEC, VA-API und D3D11-Request sowie zuverlässigem OpenCV-Fallback.
+- Der Auto-Modus bleibt ohne verifizierten Geschwindigkeitsvorteil beim bisherigen
+  OpenCV-Sampling. Auf längeren Videos kann er CPU- und GPU-FFmpeg anhand der
+  tatsächlich gemessenen Samples/s vergleichen und vergleicht die GPU-Fingerprints
+  mit den CPU-Fingerprints. GPU-Sampling wird nur bei Tempo- und Inhaltsprüfung gewählt.
+- Neuer CLI-Benchmark `python -m dubsync --benchmark-decode VIDEO [--benchmark-seconds N]`
+  mit optionaler JSON-Ausgabe. Das Video wird nicht verändert.
+- Eigener `ffmpeg`-CPU-Decodermodus für Vergleichsläufe; vollständige Video-/GPU-Ausführung
+  außerhalb der synthetischen Tests bleibt hardwareabhängig.
+- Performance-Diagnose zeigt FFmpeg-Hardware-Schnittstellen und plausible lokale
+  GPU-Verfügbarkeit. Der Versuch einer Hardwaredekodierung gilt weiterhin nicht
+  als nachgewiesene tatsächliche GPU-Ausführung.
+
+## Segment-Editor – ungetestete Entwicklungsvorschau (2026-10-29)
+
+- Zeitachsen-Dialog pro Quellspur: Grenzen in Sekunden bearbeiten, Abschnitte teilen,
+  entfernen, deaktivieren und ohne Übernahme zurücksetzen; getrennte Quell-/Master-Balken.
+- Strukturprüfung auf geordnete, nicht überlappende, gültige Zeitabschnitte.
+  Manuelle Abschnitte sind **nie automatisch sicher**: explizite Einzelexport-Freigabe;
+  Stille in deaktivierten und nicht belegten Masterbereichen.
+- Manuelle Abschnitte werden in ausdrücklich gespeicherten `.dubsync`-Projekten
+  mit Dateigröße und Änderungszeit beider Videos verwahrt; erneute Analyse bleibt
+  nötig. Die Automatik kann pro Spur zurückgesetzt werden.
+- Der Stapel überspringt Gruppen mit manuellen Schnittbereichen statt diese still
+  zu ignorieren. Bewusste lineare Zeitkorrekturen erfordern ebenfalls Exportfreigabe.
+- **Teststand:** Die erste Segment-Editor-Vorschau wurde auf ausdrücklichen Wunsch
+  ohne Tests geliefert. In der folgenden GPU/Performance-Iteration wurden
+  gezielte Qt-Tests für Teilen, Deaktivieren, Überlappungsprüfung und die
+  manuelle Sicherheitsmarkierung ergänzt; ein verdeckter Qt-Methodennamenskonflikt
+  wurde dabei korrigiert. Reale Medien-/Desktop-Tests stehen noch aus.
+
+- **Vorschau auf die abschnittsweise Synchronisation:** Mehrere klar nachgewiesene Szenenbereiche können jetzt je einen eigenen Zeitversatz bzw. Zeitmaßstab erhalten; der FFmpeg-Export kombiniert die Abschnitte und lässt unbelegte Master-Szenen in der neuen Audiospur stumm. Bestehende lineare Exporte bleiben unverändert.
+- Der automatische Segmentmodus benötigt mindestens acht unabhängige Bildanker und unterschiedliche Bildinhalte pro Segment, hohe zeitliche Konsistenz, monotone Zuordnung und ausreichende Gesamtüberdeckung. Kurze/nicht belegte Bereiche werden nicht frei geschätzt; große Schnittunterschiede bleiben unsicher.
+- Stückweise Diagnosen nennen bestätigte Abschnitte, Zeitgrenzen und Qualitätswerte. Die GUI bewahrt die Segmente beim Export, der Ankerplot nutzt die Segment-Residualwerte, und Hörproben springen nicht über unbestätigte Schnittgrenzen. Bewusste manuelle Offset-/Skalenkorrekturen ersetzen den Segmentmodus wieder durch eine lineare Zuordnung.
+- Echte FFmpeg-Integrationstests prüfen Ton vor/nach einem eingefügten Masterabschnitt mit Stille in der Lücke sowie das korrekte Überspringen einer entfernten Quellszene; automatische Erkennung und problematische Gegenbeispiele sind separat getestet.
+- Große ungeprüfte Lücken zwischen zeitlich konsistenten Bildankern blockieren jetzt den automatischen Export, auch wenn die Gesamtzahl der Anker und der globale Offset überzeugend wirken.
+- Diagnoseberichte zeigen `unverified_middle_ratio` mit einer Grenze von 20 % und geben bei Überschreitung einen verständlichen Warnhinweis aus.
+- Regressionen gegen gemeinsame Intros/Abspänne bei unterschiedlichem Mittelteil sowie gegen viele passende Anker mit großer Lücke ergänzt.
+- Auch unbestätigte Anfänge oder Enden der **gemeinsamen** Videotimeline blockieren ab 15 % den automatischen Export; tatsächliche zusätzliche Intros außerhalb der gemeinsamen Timeline bleiben zulässig. Diagnose: `unverified_edge_ratio`.
+- Die Ausgabe wird vor dem atomaren Übernehmen stärker mit dem Master verglichen: Video-Codec und -Auflösung, Original-Audiospuren, Untertitel, Anhänge und Laufzeit müssen erhalten sein. Neu hinzugefügte Audiospuren werden als AAC geprüft.
+- Der CPU-Sequenzabgleich nutzt vektorisierte Hamming-Distanzen und eine äquivalente NumPy-Präfix-Minimum-Rekurrenz. Im isolierten 700×700-Frameprofil sank seine gemessene Laufzeit von ca. 0,50 auf 0,04 Sekunden (kein Versprechen für die gesamte Videodekodierung).
+- Referenztests vergleichen die Ankerzuordnung der optimierten Berechnung mit dem ursprünglichen Algorithmus; zusätzliche Tests decken Randlücken und beschädigte Export-Metadaten ab.
+
+# 1.5.15 · Studio GUI
+
+Native workspace redesign, centralized Qt theme, collapsible sources, honest pending-analysis labels, scrollable small-window forms, accessible navigation and bounded live log. Core media algorithms unchanged.
+
 ## 1.5.14 – Neue Oberfläche & adaptive Leistung (2026-10-25)
 
 - Neue dreigeteilte Oberfläche mit Sidebar: Bibliothek, Export, Aktivität & Diagnose;
@@ -295,3 +488,18 @@
 - `./setup.sh` checks Python 3.10+, FFmpeg and FFprobe; if system dependencies are missing, it provides a distro-specific manual package hint for Debian/Ubuntu/Mint, Fedora/RHEL, Arch/Manjaro, openSUSE or Alpine without installing packages with root privileges.
 - The launch scripts use a dedicated virtual environment. A failed GUI launch from the desktop menu produces a notification where `notify-send` is available and stores diagnostics in the XDG state directory.
 - A static packaging regression suite validates shell syntax, installer/uninstaller options, XDG paths, desktop metadata, and the Qt desktop file identity.
+# 2.0.0b2 · Adaptive Hardwareprofile und Intel-iGPU-Autoerkennung (2026-10-29)
+
+- Drei ressourcenbasierte Presets **Leicht / Mittel / Stark** verteilen CPU-Threads,
+  Metadaten-Worker und lokale Decoder je nach verfügbarer Prozessor-/RAM-Kapazität.
+  Auto empfiehlt ein Preset; gespeicherte Ressourcenbudgets werden auf jedem
+  Startgerät neu ermittelt. Die Auftragssteuerung begrenzt Parallelität zusätzlich
+  anhand aktueller Systemlast und RAM-Reserve.
+- Analyseparameter und AAC-Bitrate bleiben bei Profilwechsel identisch. Die
+  Standardwerte sind 1200 Bildproben, 0,75 s Mindestabstand und 128 kbit/s;
+  manuelle Änderungen bleiben unabhängig vom Ressourcenprofil bestehen.
+- GPU-Automatik bleibt in allen Presets aktiv und zeigt Intel-iGPU-/AMD-/NVIDIA-
+  Kandidaten ehrlich als **noch zu prüfende** Decoder an. Das vorhandene
+  pro-Video-CPU/GPU-Benchmarking und der sichere CPU-Fallback bleiben erhalten.
+- Dialog, Kurzprofile, Diagnosen, Nutzeranleitung und Regressionstests synchron
+  angepasst. Physische Intel-/AMD-GPU- und NAS-Tests weiterhin ausstehend.
