@@ -14,7 +14,7 @@ from dubsync.core.ffmpeg_sampling import DecoderCandidate
 
 class CliTests(unittest.TestCase):
     def test_cli_version_matches_release_version(self):
-        self.assertEqual(VERSION, "2.0.0b2")
+        self.assertEqual(VERSION, "3.0.0b1")
 
     def test_doctor_report_has_expected_sections_and_boolean_dependencies(self):
         report = doctor_report()

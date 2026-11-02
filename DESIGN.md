@@ -55,8 +55,8 @@ DejaVu Sans Mono for the activity log. Body 13px. No web fonts or font downloads
 ## Layout
 Horizontal workspace navigation. Source list can collapse after scanning;
 episodes, the visual Abgleich-Monitor and the track inspector share a resizable
-three-pane splitter. Each owns its scroll. The center monitor has "Zeitachse"
-and "Framevergleich" tabs so the anchor plot and images remain usable in a
+three-pane splitter. Each owns its scroll. The center monitor has "Zeitachse",
+"Framevergleich" and "Audio-A/B" tabs so evidence, images and short waveforms remain usable in a
 compact viewport. At heights below 950px the redundant Studio heading and
 brand subtitle hide.
 Minimum desktop viewport 980×680. Export owns a QScrollArea, allowing all options
@@ -103,9 +103,13 @@ No added animations, timers or polling. Native progress is functional feedback.
 ### Content and data visualization
 German actions name their result. No speculative live CPU/GPU data. Technical logs
 retain only 3000 on-screen blocks; persistent rotating logs and reports remain.
-The 2.0 timeline uses only real anchors/segments in the domain object; empty
-intervals are not painted as verified coverage. Side-by-side stills are read
+The 3.0 timeline partitions nearby sampled proof, unverified time and unmapped
+scenes using both labels and color. Largest gaps are reachable by keyboard,
+but navigation never authorizes export. Side-by-side stills are read
 on demand through a bounded, cancellable FFmpeg process, not at startup.
+Waveforms use the same opt-in model (18-second mono windows, bounded resolution,
+no persistent sample cache); audio is for inspection, not visual proof.
+Decoder self-tests report measured parity, not presumed GPU utilization.
 Stored queue jobs are a direct view of the private SQLite source of truth.
 
 ## Do's and Don'ts

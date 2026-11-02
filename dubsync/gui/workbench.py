@@ -21,6 +21,8 @@ from PySide6.QtWidgets import (
 )
 
 from dubsync.core.models import AlignmentResult, EpisodeGroup, MediaInfo
+from dubsync.core.evidence import EvidenceSpan, evidence_spans, export_hold_reasons, review_issues
+from dubsync.gui.audio_review import PeakWaveform, WaveformWorker
 from dubsync.gui.theme import TOKENS
 
 
@@ -171,6 +173,7 @@ class AlignmentTimeline(QWidget):
         self.position = 0.0
         self.zoom = 1.0
         self.window_start = 0.0
+        self.evidence: list[EvidenceSpan] = []
         self.setMinimumHeight(125)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAccessibleName("Synchronisations-Timeline")
@@ -179,6 +182,7 @@ class AlignmentTimeline(QWidget):
     def set_data(self, duration: float, alignment: AlignmentResult | None) -> None:
         self.duration = max(0.0, float(duration))
         self.alignment = alignment
+        self.evidence = evidence_spans(alignment) if alignment is not None else []
         self.position = min(self.position, self.duration)
         self.window_start = 0.0
         self.zoom = 1.0
@@ -220,8 +224,15 @@ class AlignmentTimeline(QWidget):
         painter.drawText(15, 18, "BILDMASTER · ZEITACHSE")
         manual = bool(self.alignment and self.alignment.manual_segments)
         painter.drawText(15, 90, "MANUELL · NICHT VERIFIZIERT" if manual else
-                         "BILDANKER · DUNKLE LÜCKEN UNGEPRÜFT")
+                         "MINT: BILDPROBEN · GELB: UNGEPRÜFT · DUNKEL: OHNE ZUORDNUNG")
         painter.fillRect(QRectF(15, 96, width, 8), QColor(TOKENS["raised"]))
+        for span in self.evidence:
+            left = max(15.0, self._x(span.start, width))
+            right = min(15.0 + width, self._x(span.end, width))
+            if right > left:
+                color = {"sampled": TOKENS["accent"], "unverified": TOKENS["warning"],
+                         "unmapped": TOKENS["raised"]}[span.status]
+                painter.fillRect(QRectF(left, 96, right - left, 8), QColor(color))
         if self.alignment:
             safe = self.alignment.safe_for_automatic_export
             valid = [segment for segment in self.alignment.segments if segment.enabled]
@@ -231,8 +242,6 @@ class AlignmentTimeline(QWidget):
                     right = min(15.0 + width, self._x(segment.target_end, width))
                     if right > left:
                         painter.fillRect(QRectF(left, 40, right - left, 23), QColor(TOKENS["selection"]))
-                        painter.fillRect(QRectF(left, 96, right - left, 8),
-                                         QColor(TOKENS["accent"] if safe else TOKENS["warning"]))
             # A linear result has verified anchors, not a continuous known-good
             # bar. Paint only observed points; gaps remain conspicuously dark.
             tolerance = max(.75, self.alignment.sample_interval * 1.2)
@@ -311,6 +320,7 @@ class StudioReviewPanel(QFrame):
         self._alignment: AlignmentResult | None = None
         self._generation = 0
         self._frame_worker: FrameReviewWorker | None = None
+        self._waveform_worker: WaveformWorker | None = None
         self._can_load = True
         layout = QVBoxLayout(self)
         layout.setContentsMargins(13, 13, 13, 13)
@@ -335,7 +345,7 @@ class StudioReviewPanel(QFrame):
         layout.addWidget(self.quality_label)
         self.review_tabs = QTabWidget()
         self.review_tabs.setObjectName("reviewTabs")
-        self.review_tabs.setAccessibleName("Abgleich-Monitor: Zeitachse oder Standbildvergleich")
+        self.review_tabs.setAccessibleName("Abgleich-Monitor: Zeitachse, Standbilder oder Audiowellen")
         layout.addWidget(self.review_tabs, 1)
         timeline_page = QWidget()
         timeline_layout = QVBoxLayout(timeline_page)
@@ -347,6 +357,11 @@ class StudioReviewPanel(QFrame):
         frames_layout.setContentsMargins(5, 12, 5, 5)
         frames_layout.setSpacing(9)
         self.review_tabs.addTab(frames_page, "Framevergleich")
+        waveform_page = QWidget()
+        wave_layout = QVBoxLayout(waveform_page)
+        wave_layout.setContentsMargins(5, 12, 5, 5)
+        wave_layout.setSpacing(9)
+        self.review_tabs.addTab(waveform_page, "Audio-A/B")
 
         self.timeline = AlignmentTimeline()
         self.timeline.positionChanged.connect(self._timeline_moved)
@@ -369,6 +384,19 @@ class StudioReviewPanel(QFrame):
         position_row.addWidget(zoom_out)
         position_row.addWidget(zoom_in)
         timeline_layout.addLayout(position_row)
+        issue_line = QHBoxLayout()
+        self.issue_combo = QComboBox()
+        self.issue_combo.setAccessibleName("Ungeprüfte oder nicht zugeordnete Zeitbereiche")
+        self.issue_combo.setToolTip("Größte Prüfstellen. Diese Hinweise verändern die Exportfreigabe nicht.")
+        self.issue_combo.currentIndexChanged.connect(
+            lambda _index: self.issue_button.setEnabled(self.issue_combo.currentData() is not None))
+        issue_line.addWidget(self.issue_combo, 1)
+        self.issue_button = QPushButton("Prüfen")
+        self.issue_button.setAccessibleName("Ausgewählte Prüfstelle anspringen")
+        self.issue_button.setEnabled(False)
+        self.issue_button.clicked.connect(self._jump_to_issue)
+        issue_line.addWidget(self.issue_button)
+        timeline_layout.addLayout(issue_line)
 
         controls = QHBoxLayout()
         self.compare_button = QPushButton("Frames laden")
@@ -409,6 +437,30 @@ class StudioReviewPanel(QFrame):
             self.frames.append(preview)
         frames_layout.addLayout(frames_row, 1)
 
+        self.wave_button = QPushButton("Wellenformen laden")
+        self.wave_button.setObjectName("primaryButton")
+        self.wave_button.setToolTip("Liest erst nach Klick je 18 Sekunden Audio. "
+                                    "Dies beweist keine Bild- oder Episodenübereinstimmung.")
+        self.wave_button.clicked.connect(self._request_waveforms)
+        wave_layout.addWidget(self.wave_button)
+        self.wave_status = QLabel("Keine Audiodaten gelesen. Position auf der Zeitachse wählen.")
+        self.wave_status.setWordWrap(True)
+        self.wave_status.setObjectName("mutedText")
+        self.wave_views: list[PeakWaveform] = []
+        wave_row = QHBoxLayout()
+        wave_row.setSpacing(8)
+        for caption in ("BILDMASTER · AUDIO", "SPRACHFASSUNG · AUDIO"):
+            column = QVBoxLayout()
+            column.addWidget(QLabel(caption))
+            view = PeakWaveform()
+            view.setMinimumHeight(54)
+            self.wave_views.append(view)
+            column.addWidget(view)
+            wave_row.addLayout(column, 1)
+        wave_layout.addLayout(wave_row)
+        wave_layout.addWidget(self.wave_status)
+        wave_layout.addStretch(1)
+
     def reset(self, message: str = "Keine Episode ausgewählt") -> None:
         self._generation += 1
         self._master = None
@@ -420,8 +472,12 @@ class StudioReviewPanel(QFrame):
         self.source_combo.clear()
         self.source_combo.blockSignals(False)
         self.timeline.set_data(0, None)
+        self.issue_combo.clear()
+        self.issue_button.setEnabled(False)
         self.compare_button.setEnabled(False)
+        self.wave_button.setEnabled(False)
         self._clear_frames()
+        self._clear_waveforms()
         self.quality_label.setText("Fassungen und Analyseergebnisse erscheinen nach dem Scan.")
         self.quality_label.setProperty("state", "unknown")
         self.quality_label.style().unpolish(self.quality_label)
@@ -466,6 +522,7 @@ class StudioReviewPanel(QFrame):
         self._source = self.source_combo.currentData()
         self._generation += 1
         self._clear_frames()
+        self._clear_waveforms()
         if self._source:
             self.sourceChanged.emit(self._source)
 
@@ -473,12 +530,16 @@ class StudioReviewPanel(QFrame):
         self._alignment = alignment
         duration = self._media[self._master].duration if self._master in self._media else 0.0
         self.timeline.set_data(duration, alignment)
+        self._update_issues(alignment)
         self.seek.blockSignals(True)
         self.seek.setValue(0)
         self.seek.blockSignals(False)
         self.compare_button.setEnabled(bool(self._can_load and self._source and self._master and duration > 0 and
                                             self._frame_worker is None))
+        self.wave_button.setEnabled(bool(self._can_load and self._source and self._master and duration > 0 and
+                                         self._waveform_worker is None))
         self._clear_frames()
+        self._clear_waveforms()
         if alignment is None:
             self.quality_label.setText("NOCH NICHT ANALYSIERT · Bildvergleich nur nominell, kein Match-Nachweis")
             self.quality_label.setProperty("state", "unknown")
@@ -489,12 +550,36 @@ class StudioReviewPanel(QFrame):
                 f"{len(alignment.anchors)} Anker · {alignment.coverage:.0%} Abdeckung\n"
                 f"Größte Lücke Mitte {alignment.max_unverified_middle_ratio:.1%} · "
                 f"Rand {alignment.max_unverified_edge_ratio:.1%}"
+                + ("\nGrund: " + "; ".join(export_hold_reasons(alignment)[:2])
+                   if not alignment.safe_for_automatic_export else "")
             )
             self.quality_label.setProperty("state", "safe" if alignment.safe_for_automatic_export else "unsafe")
         self.quality_label.style().unpolish(self.quality_label)
         self.quality_label.style().polish(self.quality_label)
         self._position_changed(0)
         self.frame_status.setText("Bildvorschau auf Abruf · die Timeline zeigt nur Messdaten.")
+
+    def _update_issues(self, alignment: AlignmentResult | None) -> None:
+        self.issue_combo.clear()
+        if alignment is not None:
+            for span in review_issues(alignment):
+                label = "Keine Zuordnung" if span.status == "unmapped" else "Ungeprüfter Bereich"
+                self.issue_combo.addItem(
+                    f"{label} · {formatted_time(span.start)}–{formatted_time(span.end)} "
+                    f"({span.duration:.1f} s)", (span.start, span.end),
+                )
+        if not self.issue_combo.count():
+            self.issue_combo.addItem("Keine größeren Prüfstellen", None)
+        self.issue_button.setEnabled(self.issue_combo.currentData() is not None)
+
+    def _jump_to_issue(self) -> None:
+        issue = self.issue_combo.currentData()
+        if issue is None:
+            return
+        start, end = issue
+        middle = (start + end) / 2
+        self.timeline.set_position(middle, emit=True)
+        self.timeline.set_zoom(max(self.timeline.zoom, min(16.0, self.timeline.duration / max(8., (end - start) * 2))))
 
     def _position_changed(self, seconds: float) -> None:
         # In-flight frames belong to their original timestamp. Once the cursor
@@ -504,6 +589,7 @@ class StudioReviewPanel(QFrame):
         self.frame_status.setText("Position geändert · Frames bei Bedarf neu laden")
         for label in self.frames:
             label.reset_image("Noch kein Frame an dieser Position")
+        self._clear_waveforms("Position geändert · Wellenformen bei Bedarf neu laden")
 
     def _seek_changed(self, value: int) -> None:
         position = self.timeline.duration * value / 1000
@@ -521,10 +607,55 @@ class StudioReviewPanel(QFrame):
             label.reset_image("Vorschau auf Abruf")
         self.frame_status.setText("Die Vorschau liest erst nach Klick Mediendaten.")
 
+    def _clear_waveforms(self, message: str = "Wellenformen werden erst nach Klick gelesen.") -> None:
+        for view in self.wave_views:
+            view.set_peaks(())
+        self.wave_status.setText(message)
+
     def set_processing_enabled(self, enabled: bool) -> None:
         self._can_load = enabled
         self.compare_button.setEnabled(bool(enabled and self._master and self._source and
                                             self.timeline.duration > 0 and self._frame_worker is None))
+        self.wave_button.setEnabled(bool(enabled and self._master and self._source and
+                                         self.timeline.duration > 0 and self._waveform_worker is None))
+
+    def _request_waveforms(self) -> None:
+        if self._waveform_worker is not None or not self._master or not self._source:
+            return
+        media = self._media.get(self._source)
+        if media is None:
+            return
+        position = self.timeline.position
+        source_time, state = review_position(self._alignment, position, media.duration)
+        self._clear_waveforms(f"Lese Audioausschnitte … {state}")
+        self.wave_button.setEnabled(False)
+        generation = self._generation
+        worker = WaveformWorker(self._master, self._source, position, source_time, self)
+        self._waveform_worker = worker
+
+        def success(result: tuple) -> None:
+            if generation != self._generation:
+                return
+            for view, excerpt in zip(self.wave_views, result):
+                view.set_peaks(excerpt.peaks if excerpt is not None else ())
+            suffix = " · keine zugeordnete Quellstelle" if result[1] is None else ""
+            self.wave_status.setText(f"Audio-A/B bei {formatted_time(position)}{suffix} · keine Exportfreigabe")
+
+        def failed(message: str) -> None:
+            if generation == self._generation:
+                self.wave_status.setText("Wellenformen nicht verfügbar: " + message)
+
+        def finished() -> None:
+            if self._waveform_worker is worker:
+                self._waveform_worker = None
+            worker.deleteLater()
+            self.wave_button.setEnabled(bool(self._can_load and self._master and self._source and
+                                             self.timeline.duration > 0))
+
+        worker.ready.connect(success)
+        worker.error.connect(failed)
+        worker.finished.connect(finished)
+        worker.start()
 
     def _request_comparison(self) -> None:
         if self._frame_worker is not None or not self._master or not self._source:
@@ -564,8 +695,8 @@ class StudioReviewPanel(QFrame):
         worker.start()
 
     def stop_workers(self) -> bool:
-        worker = self._frame_worker
-        if worker is None:
-            return True
-        worker.cancel()
-        return worker.wait(3500)
+        workers = [worker for worker in (self._frame_worker, self._waveform_worker)
+                   if worker is not None]
+        for worker in workers:
+            worker.cancel()
+        return all(worker.wait(3500) for worker in workers)

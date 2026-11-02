@@ -59,10 +59,22 @@ def detect_piecewise(
     if any(len(group) < 8 for group in groups):
         return None
 
+    # A repeated opening card can produce perfect hashes on either side of a
+    # proposed cut without proving that both *episodes* match. Require each
+    # section to contain at least five visual motifs absent from all other
+    # sections. This is conservative and never silently changes old exports.
+    group_hashes = [{source_hashes[a.source_time] for a in group
+                     if a.source_time in source_hashes} for group in groups]
+    exclusives = [len(hashes - set().union(*(other for index, other in enumerate(group_hashes)
+                                          if index != group_index)))
+                  for group_index, hashes in enumerate(group_hashes)]
+    if any(count < 5 for count in exclusives):
+        return None
+
     sections: list[TimelineSegment] = []
     matched = 0
     tolerance = max(0.75, interval * 1.20)
-    for group in groups:
+    for group, exclusive_count in zip(groups, exclusives):
         x = np.asarray([a.source_time for a in group], dtype=np.float64)
         y = np.asarray([a.target_time for a in group], dtype=np.float64)
         shifted = x - x[0]
@@ -97,6 +109,7 @@ def detect_piecewise(
             anchor_count=len(group), median_hamming=float(np.median(
                 [a.hamming_distance for a in group])),
             rms_error=float(np.sqrt(np.mean(residual ** 2))), distinct_hashes=unique,
+            exclusive_hashes=exclusive_count,
         ))
         matched += len(group)
 
@@ -117,7 +130,7 @@ def detect_piecewise(
         max_samples=max_samples, hardware_accel=hardware_accel,
         visual_distinct_hashes=len({source_hashes[a.source_time] for a in good
                                     if a.source_time in source_hashes}),
-        segments=sections, engine_version="phash-piecewise-1.0",
+        segments=sections, engine_version="phash-piecewise-2.0",
         warnings=["Abschnittsweise Synchronisation: nicht passende Master-Abschnitte bleiben in der neuen Tonspur stumm."],
     )
     return result if result.safe_for_automatic_export else None

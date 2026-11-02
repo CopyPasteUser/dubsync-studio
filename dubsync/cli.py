@@ -14,7 +14,7 @@ from pathlib import Path
 from dubsync.core.performance import system_specs, recommended_profile
 from typing import Any
 
-VERSION = "2.0.0b2"
+VERSION = "3.0.0b1"
 
 
 def doctor_report() -> dict[str, Any]:

@@ -36,8 +36,9 @@ def main() -> int:
         match = re.search(pattern, text)
         if not match or match.group(1) != version:
             errors.append(f"Version metadata mismatch: {name} (expected {version})")
-    if not re.search(rf"^# DubSync Studio {re.escape(version)}$", readme, re.MULTILINE):
-        errors.append("README header does not match package version")
+    if (not re.search(r"^# DubSync Studio$", readme, re.MULTILINE)
+            or not re.search(rf"\*\*Current release:\*\*\s*`{re.escape(version)}`", readme)):
+        errors.append("README title or current-release field does not match package version")
     expected_status = ("Development Status :: 4 - Beta" if re.search(r"b\d+$", version)
                        else "Development Status :: 5 - Production/Stable")
     if expected_status not in pyproject["project"].get("classifiers", []):

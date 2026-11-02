@@ -116,6 +116,26 @@ class CutDetectionTests(unittest.TestCase):
                    + [Anchor(float(i), float(i + 20), 0) for i in range(150, 300)])
         self.assertIsNone(candidate(anchors, repetitive, 320))
 
+    def test_repeated_visual_motifs_do_not_certify_independent_sections(self):
+        # 16 distinctive images overall, 8 repeated in BOTH halves: without
+        # cross-section uniqueness, two identical intros could certify a cut.
+        source = [FrameSample(float(i), i % 16) for i in range(160)]
+        anchors = ([Anchor(float(i), float(i), 0) for i in range(80)]
+                   + [Anchor(float(i), float(i + 20), 0) for i in range(80, 160)])
+        self.assertIsNone(candidate(anchors, source, 180))
+
+    def test_exclusive_visual_motifs_are_serialized_and_checked(self):
+        anchors = ([Anchor(float(i), float(i), 0) for i in range(120)]
+                   + [Anchor(float(i), float(i + 20), 0) for i in range(120, 300)])
+        result = candidate(anchors, self.frames, 320)
+        self.assertIsNotNone(result)
+        self.assertTrue(result.safe_for_automatic_export)
+        self.assertGreaterEqual(min(s.exclusive_hashes for s in result.segments), 5)
+        copied = AlignmentResult.from_dict(result.to_dict())
+        self.assertEqual(copied, result)
+        copied.segments[0].exclusive_hashes = 0
+        self.assertFalse(copied.safe_for_automatic_export)
+
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"),
                      "FFmpeg/FFprobe erforderlich")

@@ -327,3 +327,27 @@ def benchmark_decoder_candidates(path: str, duration: float, interval: float,
                 raise
             results[name] = {"error": str(exc)}
     return results
+
+
+def choose_verified_decoder(measurements: dict, candidates: list[DecoderCandidate]
+                            ) -> DecoderCandidate | None:
+    """Shared CPU/GPU parity and speed gate for auto-selection and diagnostics.
+
+    Matching sampled hashes only verifies output parity. It does not prove that
+    the driver physically performed decode on the GPU.
+    """
+    cpu = measurements.get("cpu", {})
+    cpu_speed = float(cpu.get("samples_per_second", 0))
+    if int(cpu.get("frames", 0)) < 4 or cpu_speed <= 0:
+        return None
+    accepted = []
+    for candidate in candidates:
+        result = measurements.get(candidate.key, {})
+        speed = float(result.get("samples_per_second", 0))
+        if (speed > cpu_speed * 1.15 and
+                float(result.get("frame_match_ratio", 0)) >= .95 and
+                int(result.get("median_hamming_to_cpu", 99)) <= 10 and
+                int(result.get("frames", 0)) >= 4 and
+                abs(int(result["frames"]) - int(cpu["frames"])) <= 1):
+            accepted.append((speed, candidate))
+    return max(accepted, key=lambda item: item[0])[1] if accepted else None

@@ -7,6 +7,7 @@ for layout documentation, not evidence of a successful real-world export.
 from __future__ import annotations
 
 import os
+import math
 import tempfile
 from pathlib import Path
 
@@ -58,17 +59,31 @@ def main() -> int:
             window._refresh_workflow_summary()
             window.show()
             app.processEvents()
-            window.grab().save(str(screenshots / "studio-review-2.png"))
+            window.grab().save(str(screenshots / "studio-review-3.png"))
+            # Only synthetic amplitudes: demonstrate the actual Qt drawing
+            # component without suggesting that real source audio was read.
+            window.review_panel.review_tabs.setCurrentIndex(2)
+            for index, view in enumerate(window.review_panel.wave_views):
+                view.set_peaks(tuple(abs(math.sin(i * .2 + index) *
+                                         math.sin(i * .071)) * .65 for i in range(128)))
+            window.review_panel.wave_status.setText(
+                "SYNTHETISCHE DEMO · keine Audiodaten gelesen")
+            app.processEvents()
+            window.grab().save(str(screenshots / "studio-waveform-3.png"))
             window.review_panel.review_tabs.setCurrentIndex(1)
             app.processEvents()
-            window.grab().save(str(screenshots / "studio-frames-2.png"))
             window._navigate_to(1)
             app.processEvents()
-            window.grab().save(str(screenshots / "studio-queue-2.png"))
+            window.grab().save(str(screenshots / "studio-queue-3.png"))
             export = window._page_stack.currentWidget()
             export.ensureWidgetVisible(window.profile_tradeoff)
             app.processEvents()
-            window.grab().save(str(screenshots / "studio-hardware-presets-2.png"))
+            window.grab().save(str(screenshots / "studio-hardware-presets-3.png"))
+            window._navigate_to(0)
+            window.review_panel.review_tabs.setCurrentIndex(0)
+            window.resize(980, 680)
+            app.processEvents()
+            window.grab().save(str(screenshots / "studio-compact-3.png"))
         finally:
             window.project_dirty = False
             window.close()

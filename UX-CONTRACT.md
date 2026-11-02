@@ -24,6 +24,9 @@ No billing, authentication or cloud CRUD is present.
 | Durable batch queue | BatchQueueDialog / QTableWidget | core/job_queue.py SQLite entries; core/batch_diagnostics.py proof | explicit start/restart/retry/drain; no implicit startup | tests/test_job_queue.py; tests/test_gui_smoke.py |
 | Inline queue room | QueueControlRoom / QTableWidget | same BatchJobQueue SQLite `recent()`; original start/retry/drain callbacks | scrollable 2.0 Stapelzentrale; original dialog retained | tests/test_workbench_2.py |
 | Visual review | StudioReviewPanel / AlignmentTimeline | live selected AlignmentResult and MediaInfo | anchor/segment plot; user-chosen source; explicit two-still loading | tests/test_workbench_2.py; real NAS pending |
+| Visual evidence | AlignmentTimeline / core/evidence.py | observed anchors plus immutable alignment mapping | sampled / unverified / unmapped; largest-gap navigation; no export mutation | tests/test_evidence.py |
+| Audio A/B | StudioReviewPanel / gui/audio_review.py | explicit 18 s FFmpeg excerpts | two independent waveforms; unmatched source remains empty | tests/test_audio_review.py |
+| GPU self-test | gui/decoder_test.py / core/ffmpeg_sampling.py | measured CPU/GPU frame parity and throughput | explicit local file, read-only worker, cancel | tests/test_decoder_test.py |
 
 ## Flow ledger
 - Add sources: picker or drag/drop → roots list → explicit scan; no implicit export.
@@ -37,6 +40,10 @@ No billing, authentication or cloud CRUD is present.
   is displayed as *unpaired*, never as an invented correspondence. Frame reads
   are manual, bounded in time/size and read-only. Manual slope/offset values are
   presented as provisional preview mappings and never turn a match safe.
+- Evidence gaps and waveforms: sample neighborhoods are never a claim of
+  continuous frame-by-frame inspection. Jumping to a gap does not modify a
+  result. Waveform reads require a click and are bounded in duration, RAM and
+  time; stale results are discarded when source/cursor changes.
 - Inline batch control: reading the queue never executes it. Start and retry
   use the same verified core actions/authorization as the legacy queue dialog;
   automatic drain processes queued entries only. Real progress is refreshed

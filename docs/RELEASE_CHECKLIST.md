@@ -1,5 +1,16 @@
 # Release checklist
 
+For the current **3.0.0b1 beta**, all former 2.0 physical-quality gates remain
+active. No stable release is claimed before real hardware/NAS acceptance; see
+[current roadmap](ROADMAP_NEXT.md).
+
+- [ ] Test the 3.0 evidence inspector, issue jump and waveform A/B preview on
+  a real display at minimum window height and with keyboard-only navigation.
+- [ ] Validate the exclusive-motif gate on real wrong-episode intros, repeated
+  credits, and mixed-cut/drift reference media.
+- [ ] Run the GUI decoder self-test on actual Intel iGPU, AMD, NVIDIA and CPU;
+  verify physical GPU utilization and output parity independently.
+
 - [ ] Run `./setup.sh` in a clean environment with FFmpeg and FFprobe installed.
 - [ ] Run `./release-check.sh --require-gui` on the target OS to require PySide6.
 - [ ] Open the GUI and verify project save/open, missing-source warning, settings dialog, job history, log viewer and close confirmation.
@@ -21,5 +32,5 @@
 - [ ] Run `./install.sh --desktop-shortcut` and verify the optional desktop icon path on the target environment.
 - [ ] Run `~/.local/share/dubsync-studio/app/uninstall.sh`; verify config/cache/state persist. Re-run on a disposable test user with `--purge-data` and verify the explicit purge path.
 - [ ] Repeat setup on Debian/Ubuntu/Mint, Fedora, Arch/Manjaro, and openSUSE where possible; document unavailable PySide6/OpenCV wheels and distro-specific Qt/FFmpeg runtime libraries.
-- [ ] Before claiming **stable 2.0.0**, satisfy the remaining hardware/UX/recovery gates in `docs/ROADMAP_2_0.md` (2.0.0b2 deliberately remains beta).
+- [ ] Before claiming **stable 3.0.0**, satisfy the remaining hardware/UX/recovery gates in `docs/ROADMAP_2_0.md` and `docs/ROADMAP_NEXT.md`.
 - [ ] Keep Alpine/musl and non-mainstream CPU architectures listed as unverified unless a compatible dependency build is provided.

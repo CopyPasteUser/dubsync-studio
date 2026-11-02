@@ -53,7 +53,8 @@ class GuiContractTests(unittest.TestCase):
         self.assertIn('audio_bitrate_kbps=self.performance_settings["audio_bitrate_kbps"]', self.text)
 
     def test_stable_release_has_project_save_load_and_job_history(self):
-        self.assertIn('APP_VERSION = "2.0.0b2"', self.text)
+        from dubsync import __version__
+        self.assertIn(f'APP_VERSION = "{__version__}"', self.text)
         self.assertIn('QAction("Projekt öffnen…", self)', self.text)
         self.assertIn('QAction("Projekt speichern", self)', self.text)
         self.assertIn('def _open_project(self)', self.text)

@@ -21,7 +21,8 @@ from .piecewise import detect_piecewise
 from .probe import probe_media
 from .ffmpeg_sampling import (SamplingBackendError, ffmpeg_sample,
                               benchmark_decoder_candidates,
-                              gpu_decode_candidates, vaapi_render_device)
+                              gpu_decode_candidates, vaapi_render_device,
+                              choose_verified_decoder)
 from .frame_cache import FrameSampleCache, source_identity
 from .network import is_network_path
 from .performance import sampling_worker_policy, system_specs
@@ -161,20 +162,8 @@ def sample_video(path: str, duration: float, interval: float = 0.5,
                         path, duration, interval, perceptual_hash,
                         candidates=measured_candidates, cancel_event=cancel_event,
                         seconds=6.0 if len(measured_candidates) > 1 else 8.0)
-                    cpu = benchmark.get("cpu", {})
-                    cpu_speed = float(cpu.get("samples_per_second", 0))
-                    ranked = []
-                    for candidate in measured_candidates:
-                        accelerated = benchmark.get(candidate.key, {})
-                        gpu_speed = float(accelerated.get("samples_per_second", 0))
-                        if ("frames" in cpu and gpu_speed > cpu_speed * 1.15 and
-                                float(accelerated.get("frame_match_ratio", 0)) >= 0.95 and
-                                int(accelerated.get("median_hamming_to_cpu", 99)) <= 10 and
-                                int(accelerated.get("frames", 0)) >= 4 and
-                                abs(int(accelerated["frames"]) - int(cpu["frames"])) <= 1):
-                            ranked.append((gpu_speed, candidate))
-                    if ranked:
-                        _, winner = max(ranked, key=lambda pair: pair[0])
+                    winner = choose_verified_decoder(benchmark, measured_candidates)
+                    if winner is not None:
                         selected_gpu, gpu_device = winner.accel, winner.device
                         selected_candidate = winner.key
                         use_ffmpeg = True

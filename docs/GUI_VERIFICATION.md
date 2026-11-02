@@ -1,4 +1,22 @@
-# DubSync Studio 2.0.0b2 development verification
+# DubSync Studio 3.0.0b1 development verification
+
+## 3.0 beta checks (2026-11-02)
+
+- `QT_QPA_PLATFORM=offscreen python -m pytest -q`: 269 passed, 1 skipped
+  during the development run. Retest after packaging on the target host.
+- New evidence tests cover unmapped versus unverified time, largest-gap
+  selection, manual safety preservation and nonfinite inputs.
+- New waveform tests exercise real local FFmpeg audio extraction, bounded
+  peak arrays, cooperative cancellation and no source read for unmatched time.
+- Decoder self-test tests cover verified Intel selection, mismatching GPU
+  rejection, and CPU reference failure. Real Intel/AMD/NVIDIA runs are pending.
+- Piecewise tests reject repeated visual motifs across otherwise plausible
+  cut sections, and verify round-trip serialization of exclusive-motif proof.
+- `scripts/capture_studio_2.py` now also produces five `*-3.png` genuine Qt
+  screenshots using only synthetic demo data. The new waveform illustration
+  is explicitly synthetic, not a captured real audio excerpt.
+- Reinspection on a real compositor remains required at narrow screen sizes;
+  offscreen screenshots are not an accessibility or driver certification.
 
 ## Automated checks (2026-10-29)
 

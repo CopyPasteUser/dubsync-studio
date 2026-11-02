@@ -64,7 +64,7 @@ from dubsync.core.performance import (
 
 
 APP_TITLE = "DubSync Studio"
-APP_VERSION = "2.0.0b2"
+APP_VERSION = "3.0.0b1"
 APP_ROOT = Path(__file__).resolve().parents[2]
 _PACKAGE_LOGO = Path(__file__).resolve().parents[1] / "assets" / "dubsync-studio.svg"
 APP_LOGO = _PACKAGE_LOGO if _PACKAGE_LOGO.is_file() else APP_ROOT / "assets" / "dubsync-studio.svg"
@@ -1338,7 +1338,7 @@ class MainWindow(QMainWindow):
         self.tool_badge.setObjectName("statusChip")
         self.tool_badge.setAccessibleName("Status der Medienwerkzeuge")
         header.addWidget(self.tool_badge, alignment=Qt.AlignmentFlag.AlignVCenter)
-        self.release_badge = QLabel("2.0 · BETA")
+        self.release_badge = QLabel("3.0 · BETA")
         self.release_badge.setObjectName("releaseBadge")
         self.release_badge.setToolTip("Vorabversion: automatische Regressionen geprüft; NAS und reale GPU-/Desktop-Systeme bleiben Release-Gates.")
         header.addWidget(self.release_badge, alignment=Qt.AlignmentFlag.AlignVCenter)
@@ -2332,6 +2332,14 @@ class MainWindow(QMainWindow):
         details.setReadOnly(True)
         details.setPlainText("\n".join(lines))
         box.addWidget(details, 1)
+        decoder_button = QPushButton("CPU/GPU-Selbsttest mit Videodatei …")
+        decoder_button.setEnabled(self.worker is None)
+        decoder_button.setToolTip("Nur nach Dateiauswahl: lokale Decoderleistung und Bildgleichheit prüfen")
+        def open_decoder_test():
+            from dubsync.gui.decoder_test import DecoderSelfTestDialog
+            DecoderSelfTestDialog(dialog).exec()
+        decoder_button.clicked.connect(open_decoder_test)
+        box.addWidget(decoder_button)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(dialog.reject)
         buttons.accepted.connect(dialog.accept)

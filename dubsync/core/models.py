@@ -66,6 +66,9 @@ class TimelineSegment:
     rms_error: float
     distinct_hashes: int
     enabled: bool = True
+    # Images unique to this particular cut section, excluding frames reused
+    # by any other section (shared intros/credits must not certify a cut).
+    exclusive_hashes: int = 0
 
     @property
     def slope(self) -> float:
@@ -229,6 +232,7 @@ class AlignmentResult:
                     or segment.target_end > self.target_duration + 0.02
                     or not (0.90 <= segment.slope <= 1.10)
                     or segment.anchor_count < 8 or segment.distinct_hashes < 8
+                    or segment.exclusive_hashes < 5
                     or segment.median_hamming > 10
                     or segment.rms_error > max(0.75, self.sample_interval * 1.20)):
                 return False

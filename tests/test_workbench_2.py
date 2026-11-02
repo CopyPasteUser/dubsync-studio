@@ -66,7 +66,7 @@ class ReviewWorkbenchTests(unittest.TestCase):
                 panel.timeline.set_position(25, emit=True)
                 self.app.processEvents()
                 self.assertEqual(panel.source_combo.count(), 1)
-                self.assertEqual(panel.review_tabs.count(), 2)
+                self.assertEqual(panel.review_tabs.count(), 3)
                 self.assertTrue(panel.compare_button.isEnabled())
                 panel.set_processing_enabled(False)
                 self.assertFalse(panel.compare_button.isEnabled())

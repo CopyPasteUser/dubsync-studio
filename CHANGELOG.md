@@ -1,3 +1,17 @@
+# 3.0.0b1 · Evidence-first sync review and stronger multi-cut safety (2026-11-02)
+
+- Evidence timeline separates visual samples, unverified time and unmapped
+  scenes. Jump directly to large gaps without changing export eligibility;
+  blocked results explain key reasons.
+- User-triggered, bounded 18-second A/B waveforms in Qt. Stale previews are
+  discarded when episode or playback cursor changes.
+- CPU/GPU self-test in System Diagnostics. Intel/AMD/NVIDIA candidates use the
+  same speed and frame-parity gate as automatic decoding.
+- Piecewise matching requires five image motifs exclusive to each segment.
+  Older saved segments without that proof cannot automatically export.
+- Additional offline tests, genuine Qt demo UI captures, concise English README
+  and updated roadmap. Real hardware/NAS/desktop acceptance is still pending.
+
 # 2.0.0b2 · Adaptive Hardwareprofile und Studio-Verifikation (2026-10-29)
 
 - Hardwarebezogene Empfehlungen für Leicht/Mittel/Stark und Auto anhand CPU,

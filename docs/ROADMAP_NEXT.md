@@ -1,49 +1,55 @@
-# DubSync Studio – Roadmap nach 2.0.0b2
+# DubSync Studio · Roadmap to 3.0
 
-**Stand:** 2026-10-29 · **Planung, keine Implementierungszusage oder
-Kalenderfreigabe.** Version 2.0.0b2 ist weiterhin Beta.
+Updated **2026-11-02**. Milestones below describe capability tracks, **not**
+retroactively published version tags. `3.0.0b1` is a development beta; no
+stable 2.x or 3.x release has been certified.
 
-Die vollständigen Freigabekriterien für 2.0 liegen in
-[ROADMAP_2_0.md](ROADMAP_2_0.md) und
-[RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
-
-| Ziel | Schwerpunkt | Freigabekriterium |
+| Track | Status | Acceptance / outstanding work |
 | --- | --- | --- |
-| 2.0.0b3 | Hardware-Selbsttest, messbare GPU-Auswahl, individuelle Leistungsbudgets, Diagnose im UI | Nachweisbarer schneller und korrekter Decodepfad, reproduzierbare CPU-/GPU-Messung, sicherer Fallback |
-| 2.0 RC1 | NAS-Recovery, Crash-/Queue-Fortsetzung, Installations- und Accessibility-QA | Echte unterbrochene Stapel, verschiedene Systeme und beschädigte/fehlende Mounts geprüft |
-| 2.0 Stable | Korrekte Exporte und langfristig wartbare Basis | Sämtliche 2.0-Release-Gates erfüllt; keine stillen Quellenänderungen oder ungesicherten Exportfreigaben |
-| 2.1 | Audio-Waveforms, A/B-Hörvergleich, Timeline-Werkzeuge und Konfidenz-Navigation | Verbesserte manuelle Prüfung ohne automatische Freigabe manuell veränderter Abschnitte |
-| 2.2 | Sicherere Episoden-Kandidatenwahl, Staffelvorlagen, Queue-Drill-down | Widersprüche werden sichtbar, falsche Fassung wird nicht still automatisch gewählt |
-| 2.3 | Adaptives Sampling, begrenzte Frame-Caches, NAS-aware I/O und Laufzeitprofile | Reale Geschwindigkeit gemessen, keinerlei geringere Zuordnungs- oder Exportintegrität |
-| 3.0 | Unterschiedliche Schnittfassungen, segmentweiser Drift und mehrstufiger Inhaltsabgleich | Szenenzuordnung anhand unabhängiger Signale überprüfbar; unsichere Stellen bleiben gesperrt |
+| 2.0 · Reliable foundation | **Implemented; physical QA pending** | Native three-column studio, bounded image previews, cautious resume, atomic export. Test real process crashes, NAS loss and recovery before a stable label. |
+| 2.1 · Deep review | **Implemented in 3.0 beta** | Measured image-evidence map, largest-gap jump navigation, on-demand A/B audio waveform excerpts, unchanged export gates. Next: usable continuous audio scrubbing and playback A/B. |
+| 2.2 · Episode intelligence | **Partly implemented** | Explicit filename-identity checks and two-way independently confirmed swap recovery exist. Next: user-reviewable ranked candidate matrix and season-level mismatch explanations. No unilateral reassignments. |
+| 2.3 · Adaptive engine | **Implemented; benchmark QA pending** | CPU/RAM-aware Light/Balanced/Maximum presets, separate Intel/AMD render-node discovery, verified frame parity and speed gate, UI decoder self-test. Next: repeatable reference-device benchmarks and sustained-load throttling. |
+| 3.0 · Advanced matching | **Beta implementation** | Piecewise 2–5 independently proven monotone segments; disjoint scenes remain silent/skipped. New: exclude cross-segment repeated motifs from proof. Next: disagreement diagnostics from an independent visual signal and stronger mixed-cut/drift reference corpus. |
+| **3.0 stable** | **Blocked by physical acceptance** | All criteria below must be met on actual hardware and NAS installations. |
 
-## Nächster Arbeitsauftrag: 2.0.0b3
+## Required before stable 3.0
 
-1. **Hardware inventarisieren:** CPU-/RAM-Limits, verfügbare GPUs und FFmpeg-
-   Codecpfade erkennen, ohne Hardwareausführung allein aus einem Gerätenamen
-   oder der FFmpeg-Option abzuleiten.
-2. **Sicheren Selbsttest bieten:** einen kurzen lokalen Dekodierlauf je
-   relevantem Kandidaten mit konsistenter Bildfingerprint-Referenz vergleichen.
-   Incompatible oder langsamere Pfade fallen auf CPU zurück.
-3. **Ressourcenprofile kalibrieren:** Leicht/Mittel/Stark weiterhin anhand
-   der konkreten Maschine und ihrer aktuellen Last ableiten; alle drei benutzen
-   dieselben Sicherheitsbedingungen für Matching und Export. Stark heißt
-   maximaler *Durchsatz*, nicht zwingend 100 % CPU-Last.
-4. **Transparenz im Studio:** effektiven Decoder, Workerzahl, reale und
-   angeforderte Beschleunigung, Fehlergrund und Benchmarkresultat anzeigen.
-5. **NAS- und Crash-Tests vorbereiten:** deterministische lokale Ausfalltests
-   erweitern; echte SMB-/NFS- und Strom-/Prozessabbruchtests bei wieder
-   erreichbarem NAS nachholen.
+1. **Real-world correctness:** varied episode cuts, long introductions,
+   missing/inserted scenes, variable drift, repeated credits and deliberately
+   wrong episodes; verify that false matches never silently auto-export.
+2. **Hardware qualification:** test the Intel iGPU (including older Intel HD),
+   AMD VAAPI, NVIDIA CUDA where available, and plain CPU. Capture actual
+   performance/resource use and whether the decode is physically accelerated.
+3. **NAS failure drill:** disconnect/remount SMB/NFS during scan, analysis and
+   write. Check cancellation, existing-file handling, private journal state,
+   no source changes, and explicit safe resume.
+4. **Cross-desktop QA:** representative XFCE and GNOME/KDE Linux systems,
+   fractional scaling, keyboard-only use, error/empty/loading states, and
+   desktop installer/uninstaller; document Windows limitations honestly.
+5. **Release hygiene:** test suite, FFmpeg media export integration, packaging,
+   clean install, GitHub Actions, backup/restore of user state, and release notes.
 
-## Leitlinien für 2.1 bis 3.0
+## Proposed follow-up features after 3.0
 
-- Wellenformen und Hörproben dienen der **Prüfung**, nicht als Ersatz für
-  die unabhängige videobasierte Episoden- und Szenenfreigabe.
-- Neue Timeline-Interaktionen brauchen Undo/Redo, Grenzenkontrolle und
-  explizite Rückmeldung zum unsicheren/manuellen Zustand.
-- Automatische Stapelwiederaufnahme darf niemals eine veränderte Quelle,
-  ungültige Rezeptur oder beschädigte MKV ungeprüft überspringen.
-- Vorschaudaten und Caches sind begrenzt; ein bloßer Episodenwechsel soll
-  keine unnötigen großen NAS-Lesevorgänge auslösen.
-- Ein Feature gilt erst nach Regressionstests und möglichst realen
-  CPU-/GPU-/Speicher-/I/O-Messungen als performant oder releasefähig.
+- **Episode match explorer:** compare several candidate editions against the
+  same master in a read-only scorecard; require human approval for any reassignment.
+- **Continuous A/B audition:** transport controls and synchronized audio
+  scrubbing using bounded playback windows and explicit input selection.
+- **More editing models:** robust outlier/drift visualization with an independent
+  check against scene boundaries before proposing extra time-warp segments.
+- **Runtime auto-tuning:** adaptive decoding concurrency based on measured
+  throughput, available RAM, active background load and NAS I/O contention,
+  while never changing visual safety thresholds.
+
+## Non-negotiable invariants
+
+- No source mutation, silent replacement, guessed missing dialogue or silent
+  resumption of queued jobs.
+- No automatic export based on waveform similarity, manual timeline edits,
+  cached old alignment decisions, or repeated bookend scenes alone.
+- Unavailable GPU, driver, network mount or decoder must have a clear, safe
+  fallback/error state with bounded cancellation and diagnostic evidence.
+
+The historical [2.0 design and gates](ROADMAP_2_0.md) remain available; stable
+release verification is tracked in [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).

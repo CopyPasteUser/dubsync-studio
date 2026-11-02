@@ -3,7 +3,10 @@
 DubSync Studio separates Qt presentation from media processing:
 
 - `dubsync/gui/main_window.py`: polished Qt workflow, NAS-picker flow, residual plot, synchronized audio preview, per-track Undo/Redo, accessibility settings, ETA and background metadata prewarm.
-- `dubsync/gui/workbench.py`: read-only 2.0 review center, measured-anchor timeline and explicit, cancellable FFmpeg still-frame reads. It never decides export safety.
+- `dubsync/gui/workbench.py`: read-only 3.0 evidence timeline with gap navigation and explicit, cancellable frame/audio preview controls. It never decides export safety.
+- `dubsync/core/evidence.py`: UI-only partition of sampled proof neighborhoods, unverified spans and unmapped time, plus non-authoritative export-hold explanations.
+- `dubsync/gui/audio_review.py`: optional 18-second, 8 kHz mono A/B waveforms extracted with bounded cancellable workers.
+- `dubsync/gui/decoder_test.py`: optional local CPU/GPU decoder self-test using the engine's candidate selection gate.
 - `dubsync/gui/queue_room.py`: in-page 2.0 job table and explicit actions; persisted transitions and resume proof remain in `core/job_queue.py`.
 - `dubsync/core/scanner.py`: episode grouping from filenames and folder layout.
 - `dubsync/core/probe.py`: FFprobe metadata model plus bounded concurrent probing.
@@ -38,7 +41,8 @@ DubSync Studio separates Qt presentation from media processing:
 11. Cached frame fingerprints may skip repeated decoding, but every analysis recomputes visual correspondence, quality gates, episode checks and authorization. The sampled file signature is not a full-file cryptographic identity; disabling the frame cache remains supported.
 12. Explicit batch resumption requires a matching journal recipe, unchanged source/output sampled fingerprints, identical resolved target path and fresh output media probe. Unverified files follow the normal existing-file policy; a journal never authorizes overwriting.
 13. 1.6 queue snapshots are stored privately in user-owned SQLite files; reopening the application never starts old jobs. Recovery uses a fresh journal with overwrite disabled, manual journal compatibility and fresh source checks. The GUI re-confirms queued first-run overwrite authorization after restart.
-14. 2.0 timeline and still-frame inspection cannot grant export permission. Unpaired scenes stay unpaired, manual intervals are marked provisional, previews have a bounded read and timeout and no view automatically reads source frames on selection.
+14. The 3.0 evidence timeline, waveforms and still-frame inspection cannot grant export permission. Unpaired scenes stay unpaired, manual intervals remain provisional, previews have bounded reads and timeouts, and nothing reads frames/audio automatically on selection.
+15. New piecewise results require at least five frame motifs exclusive to **each** segment; repeated opening/closing material cannot count as independent evidence. Old serialized segments without this proof remain blocked from automatic export.
 
 ## Current synchronization scope
 

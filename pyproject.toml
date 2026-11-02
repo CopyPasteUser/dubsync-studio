@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dubsync-studio"
-version = "2.0.0b2"
+version = "3.0.0b1"
 description = "Local desktop application for aligning multilingual video audio tracks"
 readme = "README.md"
 license = { file = "LICENSE" }
