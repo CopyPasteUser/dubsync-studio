@@ -13,6 +13,7 @@ from .batch_resume import (recipe_id, proof_for, load_resume_report,
                            verified_resume_entry)
 
 from .alignment import align_videos
+from .performance import cpu_decoder_threads_for_settings
 from .cache import AlignmentCache
 from .export import export_multilingual
 from .subtitles import SubtitleOptions
@@ -253,6 +254,7 @@ def batch_export_groups(
     hardware_accel = str(alignment_options.get("hardware_accel", "auto"))
     frame_cache_enabled = bool(alignment_options.get("frame_cache_enabled", True))
     sampling_workers = max(1, min(2, int(alignment_options.get("sampling_workers", 1))))
+    cpu_threads = cpu_decoder_threads_for_settings(alignment_options)
     # Batch jobs deliberately recompute every alignment: a prior result must never
     # decide which episode is fused into a new output.
     cache_enabled = False
@@ -371,6 +373,7 @@ def batch_export_groups(
                     max_samples=max_samples, hardware_accel=hardware_accel,
                     frame_cache_enabled=frame_cache_enabled,
                     sampling_workers=sampling_workers,
+                    cpu_threads=cpu_threads,
                     source_info=source_info, target_info=master_info,
                     progress=lambda phase, current, amount: announce(
                         dst_index - 1, total,
@@ -716,6 +719,7 @@ def batch_export_groups(
                         hardware_accel=hardware_accel,
                         frame_cache_enabled=frame_cache_enabled,
                         sampling_workers=sampling_workers,
+                        cpu_threads=cpu_threads,
                         source_info=info_by_path[str(Path(info.path).resolve())],
                         target_info=master_info,
                         batch_context={"position": index, "total": total,
@@ -757,6 +761,7 @@ def batch_export_groups(
                             max_samples=retry_budget, hardware_accel=hardware_accel,
                             frame_cache_enabled=frame_cache_enabled,
                             sampling_workers=sampling_workers,
+                            cpu_threads=cpu_threads,
                             source_info=info_by_path[str(Path(info.path).resolve())],
                             target_info=master_info,
                             batch_context={"position": index, "total": total,

@@ -110,12 +110,111 @@ class QtGuiSmokeTests(unittest.TestCase):
             values = dialog.values()
             self.assertFalse(values["frame_cache_enabled"])
             self.assertFalse(values["cache_enabled"])
+            self.assertTrue(dialog.autotune_button.isEnabled())
         finally:
             dialog.close()
             dialog.deleteLater()
             from PySide6.QtCore import QCoreApplication, QEvent
             QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
             self.app.processEvents()
+
+    def test_autotune_needs_explicit_accept_then_settings_save(self):
+        from unittest.mock import patch
+        from PySide6.QtWidgets import QDialog
+        from dubsync.gui.main_window import PerformanceSettingsDialog
+        from dubsync.core.performance import default_performance_settings
+        dialog = PerformanceSettingsDialog(default_performance_settings())
+        tuning = {"cpu_model": "Test CPU", "logical_cpus": 8, "threads": 2}
+        try:
+            with patch("dubsync.gui.main_window.CpuAutotuneDialog") as cls:
+                instance = cls.return_value
+                instance.exec.return_value = QDialog.DialogCode.Rejected
+                instance.recommendation = tuning
+                dialog._open_autotune()
+                self.assertNotIn("cpu_decoder_tuning", dialog.values())
+
+                instance.exec.return_value = QDialog.DialogCode.Accepted
+                dialog._open_autotune()
+            self.assertEqual(dialog.values()["preset"], "custom")
+            self.assertEqual(dialog.values()["cpu_decoder_tuning"], tuning)
+            dialog.cpu_threads.setValue(3)
+            self.assertNotIn("cpu_decoder_tuning", dialog.values())
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+
+    def test_autotune_worker_reports_eligible_result_without_auto_accept(self):
+        import time
+        from unittest.mock import patch
+        from PySide6.QtWidgets import QDialog
+        from dubsync.gui.autotune import CpuAutotuneDialog
+        tuning = {"cpu_model": "Test CPU", "logical_cpus": 8, "threads": 2}
+        report = {"logical_cpus": 8, "windows": [{"start_seconds": 0}],
+                  "tested_seconds": 8, "runs": [{"label": "default", "threads": None,
+                  "exact_frame_parity": True, "median_seconds": 2.,
+                  "speedup_vs_default": 1., "worst_window_speedup": 1.},
+                  {"label": "2", "threads": 2, "exact_frame_parity": True,
+                  "median_seconds": 1., "speedup_vs_default": 2.,
+                  "worst_window_speedup": 2.}]}
+        with tempfile.TemporaryDirectory() as folder:
+            video = Path(folder) / "episode.mkv"
+            video.touch()
+            dialog = CpuAutotuneDialog()
+            try:
+                self.assertFalse(dialog.apply_button.isEnabled())
+                with (patch("dubsync.gui.autotune.is_network_path", return_value=False),
+                      patch("dubsync.gui.autotune.tune_local_cpu_decoder",
+                            return_value={"report": report, "tuning": tuning,
+                                          "selected_filename": video.name})):
+                    dialog.start_test(str(video))
+                    deadline = time.monotonic() + 3
+                    while dialog.worker is not None and time.monotonic() < deadline:
+                        self.app.processEvents()
+                        time.sleep(.01)
+                    self.app.processEvents()
+                self.assertIsNone(dialog.worker)
+                self.assertTrue(dialog.apply_button.isEnabled())
+                self.assertEqual(dialog.result(), 0)  # no automatic acceptance
+                dialog.apply_button.click()
+                self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
+                self.assertEqual(dialog.recommendation, tuning)
+            finally:
+                dialog.close()
+                dialog.deleteLater()
+
+    def test_autotune_cancel_waits_for_worker_without_applying_anything(self):
+        import time
+        from unittest.mock import patch
+        from PySide6.QtWidgets import QDialog
+        from dubsync.gui.autotune import CpuAutotuneDialog
+
+        def until_cancel(_path, *, cancel_event, progress):
+            cancel_event.wait(2)
+            raise RuntimeError("Abgebrochen")
+
+        with tempfile.TemporaryDirectory() as folder:
+            video = Path(folder) / "episode.mkv"
+            video.touch()
+            dialog = CpuAutotuneDialog()
+            try:
+                with (patch("dubsync.gui.autotune.is_network_path", return_value=False),
+                      patch("dubsync.gui.autotune.tune_local_cpu_decoder",
+                            side_effect=until_cancel)):
+                    dialog.start_test(str(video))
+                    self.assertIsNotNone(dialog.worker)
+                    dialog.reject()
+                    self.assertFalse(dialog.apply_button.isEnabled())
+                    deadline = time.monotonic() + 3
+                    while dialog.worker is not None and time.monotonic() < deadline:
+                        self.app.processEvents()
+                        time.sleep(.01)
+                    self.app.processEvents()
+                self.assertIsNone(dialog.worker)
+                self.assertEqual(dialog.result(), QDialog.DialogCode.Rejected)
+                self.assertIsNone(dialog.recommendation)
+            finally:
+                dialog.close()
+                dialog.deleteLater()
 
     def test_resource_presets_keep_accuracy_controls_and_use_auto_gpu(self):
         from unittest import mock

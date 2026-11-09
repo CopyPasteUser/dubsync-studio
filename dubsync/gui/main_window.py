@@ -34,6 +34,7 @@ from dubsync.gui.workbench import StudioReviewPanel
 from dubsync.gui.episode_explorer import EpisodeExplorerDialog
 from dubsync.gui.audio_transport import AudioPreviewTransport
 from dubsync.gui.queue_room import QueueControlRoom
+from dubsync.gui.autotune import CpuAutotuneDialog
 
 from dubsync.core.alignment import AlignmentError, align_videos
 from dubsync.core.batch import (output_path_for_group, choose_smallest_video, estimate_output_size_bytes)
@@ -64,6 +65,7 @@ from dubsync.core.performance import (
     default_performance_settings, normalize_performance_settings,
     apply_cpu_thread_limit, supported_hardware_modes, performance_diagnostics,
     settings_for_preset, system_specs, recommended_profile, auto_decoder_summary, PROFILE_LABELS,
+    cpu_decoder_threads_for_settings,
 )
 
 
@@ -244,7 +246,8 @@ class PerformanceSettingsDialog(QDialog):
     def __init__(self, current: dict[str, Any], parent=None):
         super().__init__(parent)
         self.setWindowTitle("Feineinstellungen · Leistung & Analyse")
-        self.resize(640, 560)
+        self.resize(700, 560)
+        self._cpu_decoder_tuning = current.get("cpu_decoder_tuning")
         layout = QVBoxLayout(self)
         layout.setSpacing(14)
         intro = QLabel(
@@ -256,6 +259,15 @@ class PerformanceSettingsDialog(QDialog):
         intro.setObjectName("mutedText")
         layout.addWidget(intro)
 
+        # Keep Save/Cancel and the optional calibration action visible even on
+        # small laptop screens; the long resource form gets one scroll owner.
+        settings_scroll = QScrollArea()
+        settings_scroll.setWidgetResizable(True)
+        settings_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        settings_scroll.setAccessibleName("Leistungsoptionen")
+        settings_content = QWidget()
+        settings_layout = QVBoxLayout(settings_content)
+        settings_layout.setContentsMargins(0, 0, 6, 0)
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         self.preset_combo = QComboBox()
@@ -272,7 +284,8 @@ class PerformanceSettingsDialog(QDialog):
         self.cpu_threads = QSpinBox()
         self.cpu_threads.setRange(1, system_specs()["logical_cpus"])
         self.cpu_threads.setSuffix(" Threads")
-        self.cpu_threads.setToolTip("Begrenzt die von OpenCV verwendeten CPU-Threads.")
+        self.cpu_threads.setToolTip("Begrenzt OpenCV-CPU-Threads. Nach bestätigtem Autotuning "
+                                    "auch FFmpeg-CPU-Decoder auf dieser Hardware.")
         self.cpu_threads.setValue(int(current.get("cpu_threads", 4)))
         form.addRow("CPU-Limit", self.cpu_threads)
 
@@ -381,7 +394,7 @@ class PerformanceSettingsDialog(QDialog):
             "Lädt FFprobe-Metadaten für eine kleine Zahl kommender Episoden im Hintergrund. Bei NAS-Quellen wird langsamer und mit maximal zwei parallelen Verbindungen gearbeitet."
         )
         form.addRow("Vorladen", self.prewarm_check)
-        layout.addLayout(form)
+        settings_layout.addLayout(form)
 
         note = QLabel(
             "Alle drei Profile analysieren mit denselben Bildproben und derselben Trefferprüfung. "
@@ -393,7 +406,16 @@ class PerformanceSettingsDialog(QDialog):
         )
         note.setObjectName("mutedText")
         note.setWordWrap(True)
-        layout.addWidget(note)
+        settings_layout.addWidget(note)
+        settings_scroll.setWidget(settings_content)
+        layout.addWidget(settings_scroll, 1)
+
+        self.autotune_button = QPushButton("CPU-Decoder automatisch einmessen …")
+        self.autotune_button.setToolTip(
+            "Optionaler, abbrechbarer Messlauf mit einem lokalen Video. "
+            "Erst nach Übernehmen und Speichern wird die Empfehlung aktiviert.")
+        self.autotune_button.clicked.connect(self._open_autotune)
+        layout.addWidget(self.autotune_button)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Save
@@ -403,12 +425,25 @@ class PerformanceSettingsDialog(QDialog):
         layout.addWidget(buttons)
         self._applying_preset = False
         self.preset_combo.currentIndexChanged.connect(self._apply_preset)
-        self.cpu_threads.valueChanged.connect(self._mark_custom)
+        self.cpu_threads.valueChanged.connect(self._cpu_threads_manually_changed)
         # Accuracy/audio/cache are independent of the selected resource preset.
         self.hardware_combo.currentIndexChanged.connect(self._mark_custom)
         self.probe_workers.valueChanged.connect(self._mark_custom)
         self.sampling_workers_combo.currentIndexChanged.connect(self._mark_custom)
         self.prewarm_check.toggled.connect(self._mark_custom)
+
+    def _cpu_threads_manually_changed(self, *_args):
+        # An old measurement must not certify a manually modified value.
+        self._cpu_decoder_tuning = None
+        self._mark_custom()
+
+    def _open_autotune(self):
+        dialog = CpuAutotuneDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted or dialog.recommendation is None:
+            return
+        self.cpu_threads.setValue(int(dialog.recommendation["threads"]))
+        self._mark_custom()
+        self._cpu_decoder_tuning = dict(dialog.recommendation)
 
     def _mark_custom(self, *_args):
         if not self._applying_preset and self.preset_combo.currentData() != "custom":
@@ -420,6 +455,7 @@ class PerformanceSettingsDialog(QDialog):
         preset = str(self.preset_combo.currentData() or "system")
         if preset == "custom":
             return
+        self._cpu_decoder_tuning = None
         values = default_performance_settings() if preset == "system" else settings_for_preset(preset)
         self._applying_preset = True
         try:
@@ -441,7 +477,7 @@ class PerformanceSettingsDialog(QDialog):
             self._applying_preset = False
 
     def values(self) -> dict[str, Any]:
-        return {
+        values = {
             "preset": str(self.preset_combo.currentData() or "balanced"),
             "cpu_threads": self.cpu_threads.value(),
             "max_samples": self.max_samples.value(),
@@ -455,6 +491,10 @@ class PerformanceSettingsDialog(QDialog):
             "prewarm_metadata": self.prewarm_check.isChecked(),
             "auto_system_profile": str(self.preset_combo.currentData() or "system") == "system",
         }
+        if (self._cpu_decoder_tuning and values["preset"] == "custom" and
+                self._cpu_decoder_tuning.get("threads") == values["cpu_threads"]):
+            values["cpu_decoder_tuning"] = dict(self._cpu_decoder_tuning)
+        return values
 
 
 class AlignmentResidualPlot(QWidget):
@@ -4416,6 +4456,7 @@ class MainWindow(QMainWindow):
                     hardware_accel=options["hardware_accel"],
                     frame_cache_enabled=bool(options["frame_cache_enabled"]),
                     sampling_workers=int(options["sampling_workers"]),
+                    cpu_threads=cpu_decoder_threads_for_settings(options),
                     source_info=probed_snapshot.get(str(Path(source).resolve())),
                     target_info=master_info,
                 )
