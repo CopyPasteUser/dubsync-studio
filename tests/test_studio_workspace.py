@@ -58,6 +58,56 @@ def test_no_results_and_clear_restore_rows_immediately(window, monkeypatch):
     assert not window.episode_filter_timer.isActive()
 
 
+def test_episode_onboarding_proposes_one_explicit_action_per_state(window, monkeypatch):
+    called = []
+    monkeypatch.setattr(window, 'add_folder', lambda: called.append('folder'))
+    assert 'Noch keine Medienquellen' in window.library_empty.text()
+    assert window.library_empty_action.text() == 'Medienordner auswählen'
+    window.library_empty_action.click()
+    assert called == ['folder']
+
+    window.roots = ['/tmp/media-source']
+    window._refresh_roots()
+    assert 'Quellen ausgewählt' in window.library_empty.text()
+    assert window.library_empty_action.text() == 'Bibliothek scannen'
+    monkeypatch.setattr(window, 'scan_library', lambda: called.append('scan'))
+    window.library_empty_action.click()
+    assert called == ['folder', 'scan']
+
+    window.groups = [EpisodeGroup('one', 'Example S01E01', ['de.mkv', 'en.mkv'])]
+    window.episode_table.setRowCount(1)
+    window.episode_search.setText('missing')
+    window._filter_episodes()
+    assert window.episode_surface.currentIndex() == 0
+    assert window.library_empty_action.text() == 'Filter zurücksetzen'
+    window.library_empty_action.click()
+    assert window.episode_search.text() == ''
+    assert window.episode_filter.currentData() == 'all'
+    assert window.episode_surface.currentIndex() == 1
+
+    window._set_controls_enabled(False)
+    assert not window.library_empty_action.isEnabled()
+
+
+def test_small_studio_keeps_first_action_visible_and_rest_scrollable(window):
+    window.resize(980, 680)
+    QApplication.processEvents()
+    studio = window._page_stack.widget(0)
+    assert isinstance(studio, QScrollArea)
+    assert studio.verticalScrollBar().maximum() > 0
+    action_pos = window.library_empty_action.mapTo(
+        studio.viewport(), window.library_empty_action.rect().topLeft()
+    )
+    assert 0 <= action_pos.y()
+    assert action_pos.y() + window.library_empty_action.height() < studio.viewport().height()
+    studio.ensureWidgetVisible(window.to_export_button)
+    assert studio.verticalScrollBar().value() > 0
+
+    window.resize(1440, 900)
+    QApplication.processEvents()
+    assert studio.verticalScrollBar().maximum() == 0
+
+
 def test_switching_light_medium_strong_preserves_analysis_and_gpu_auto(window):
     window.performance_settings["sample_interval"] = 0.5
     window.performance_settings["max_samples"] = 1700
