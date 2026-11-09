@@ -70,6 +70,8 @@ if [[ "${DUBSYNC_BUILD_NATIVE:-1}" != "0" ]] && command -v cargo >/dev/null 2>&1
   if ! ./build-native.sh; then
     echo "Warnung: Rust-Engine konnte nicht gebaut werden; NumPy-Fallback bleibt nutzbar." >&2
   fi
+elif [[ "${DUBSYNC_BUILD_NATIVE:-1}" != "0" ]]; then
+  echo "Hinweis: Cargo fehlt; automatische Rust-Beschleunigung erst nach Installation von Rust/Cargo und erneutem ./setup.sh verfügbar." >&2
 fi
 printf '\nSetup abgeschlossen.\n'
 printf 'Portable starten: ./run.sh\n'

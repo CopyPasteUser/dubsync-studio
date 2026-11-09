@@ -27,6 +27,8 @@ class CliTests(unittest.TestCase):
         self.assertTrue(all(isinstance(value, bool) for value in report["dependencies"].values()))
         self.assertIn("ffmpeg", report["media_tools"])
         self.assertIn("ffprobe", report["media_tools"])
+        for key in ("rust_frame_matcher", "rust_feature_candidates", "rust_offset_candidates"):
+            self.assertIsInstance(report["hardware"][key], bool)
         self.assertIn("log", report["paths"])
         self.assertIsInstance(report["warnings"], list)
 
