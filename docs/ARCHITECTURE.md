@@ -70,12 +70,22 @@ packaged wheels retain the SVG asset without accidentally shipping a host `.so`.
 
 When the initial correspondence is unsafe, the alternative affine feature
 matcher considers the two strongest visual matches per source frame. It uses
-one bounded NumPy Hamming vector per frame and evaluates candidate time models
-with vectorized residual and prefix-maximum selection; repeated identical scenes
+one bounded NumPy Hamming vector per frame if the native candidate scanner is
+absent. When available, the Rust affine scorer evaluates sorted hypotheses in
+128-model chunks, reusing the input buffers and permitting cancellation between
+chunks. Older/missing native libraries use the existing NumPy-vectorized
+residual and prefix-maximum selection. Repeated identical scenes
 retain the original stable target-order tie break. A separate scalar reference
 in tests verifies equivalent selections for different intros, edits and drift.
 Diagnostics expose `candidate_scan_seconds` and `hypothesis_scoring_seconds`
 for this fallback. None of these optimizations bypass export-confidence gates.
+
+The long-offset path can also verify monotone timestamp-window matches in
+Rust. Its hash/time buffers are prepared only once per episode pair and reused
+across candidate shifts; older binaries retain the Python timestamp/bisect and
+Hamming implementation. The Python bridge validates the native output bounds
+and ordering before accepting matches. Both optional symbols retain ABI v1
+compatibility and never authorize an export by themselves.
 
 ## Runtime throughput and hardware selection
 

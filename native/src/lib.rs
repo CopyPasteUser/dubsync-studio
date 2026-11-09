@@ -211,6 +211,226 @@ pub unsafe extern "C" fn dubsync_offset_candidates(
     count as isize
 }
 
+fn median_f64(values: &mut [f64]) -> f64 {
+    let middle = values.len() / 2;
+    let (_, upper, _) = values.select_nth_unstable_by(middle, f64::total_cmp);
+    let upper = *upper;
+    if values.len() % 2 == 0 {
+        let lower = values[..middle].iter().copied().max_by(f64::total_cmp).unwrap();
+        (lower + upper) / 2.0
+    } else {
+        upper
+    }
+}
+
+/// Score a bounded, already sorted chunk of affine hypotheses against at most
+/// two feature candidates per source. The output is
+/// `(matched_count, -median_hamming, -median_residual, slope, offset)`.
+/// A return of zero means no supported hypothesis; one means success.
+///
+/// # Safety
+/// All input buffers must be readable for their declared lengths. `hypotheses`
+/// contains `2 * hypothesis_len` f64 values. `output` must contain five writable
+/// f64 values and must not alias any input. Nonempty inputs cannot be null.
+#[no_mangle]
+pub unsafe extern "C" fn dubsync_best_affine(
+    source_indices: *const u32,
+    target_indices: *const u32,
+    distances: *const u8,
+    source_times: *const f64,
+    target_times: *const f64,
+    candidate_len: usize,
+    source_len: usize,
+    hypotheses: *const f64,
+    hypothesis_len: usize,
+    tolerance: f64,
+    output: *mut f64,
+    output_len: usize,
+) -> isize {
+    const MAX_HYPOTHESES_PER_CALL: usize = 256;
+    if source_len > MAX_SAMPLES || candidate_len > 2 * source_len
+        || hypothesis_len > MAX_HYPOTHESES_PER_CALL || !tolerance.is_finite()
+        || tolerance <= 0.0 || output_len < 5
+    {
+        return -1;
+    }
+    if candidate_len == 0 || hypothesis_len == 0 {
+        return 0;
+    }
+    if source_indices.is_null() || target_indices.is_null() || distances.is_null()
+        || source_times.is_null() || target_times.is_null()
+        || hypotheses.is_null() || output.is_null()
+    {
+        return -1;
+    }
+    let source_indices = std::slice::from_raw_parts(source_indices, candidate_len);
+    let target_indices = std::slice::from_raw_parts(target_indices, candidate_len);
+    let distances = std::slice::from_raw_parts(distances, candidate_len);
+    let source_times = std::slice::from_raw_parts(source_times, candidate_len);
+    let target_times = std::slice::from_raw_parts(target_times, candidate_len);
+    let hypotheses = std::slice::from_raw_parts(hypotheses, hypothesis_len * 2);
+    let out = std::slice::from_raw_parts_mut(output, output_len);
+
+    let mut first = vec![usize::MAX; source_len];
+    let mut second = vec![usize::MAX; source_len];
+    let mut previous_source = 0usize;
+    for (i, &source) in source_indices.iter().enumerate() {
+        let src = source as usize;
+        if src >= source_len || (i > 0 && src < previous_source)
+            || !source_times[i].is_finite() || !target_times[i].is_finite()
+        {
+            return -1;
+        }
+        if first[src] == usize::MAX {
+            first[src] = i;
+        } else if second[src] == usize::MAX {
+            second[src] = i;
+        } else {
+            return -1;
+        }
+        previous_source = src;
+    }
+
+    let mut best: Option<(usize, f64, f64, f64, f64)> = None;
+    let mut selected_distances = Vec::with_capacity(source_len);
+    let mut selected_residuals = Vec::with_capacity(source_len);
+    for hypothesis in hypotheses.chunks_exact(2) {
+        let (slope, offset) = (hypothesis[0], hypothesis[1]);
+        if !slope.is_finite() || !offset.is_finite() {
+            return -1;
+        }
+        selected_distances.clear();
+        selected_residuals.clear();
+        let mut highest_target: Option<u32> = None;
+        for src in 0..source_len {
+            let a = first[src];
+            if a == usize::MAX {
+                continue;
+            }
+            let residual_a = (target_times[a] - (slope * source_times[a] + offset)).abs();
+            let valid_a = residual_a <= tolerance;
+            let b = second[src];
+            let residual_b = if b != usize::MAX {
+                (target_times[b] - (slope * source_times[b] + offset)).abs()
+            } else {
+                f64::INFINITY
+            };
+            let valid_b = residual_b <= tolerance;
+            let selected = if valid_a && (!valid_b || distances[a] < distances[b]
+                || (distances[a] == distances[b] && residual_a <= residual_b))
+            {
+                Some((a, residual_a))
+            } else if valid_b {
+                Some((b, residual_b))
+            } else {
+                None
+            };
+            if let Some((index, residual)) = selected {
+                let target = target_indices[index];
+                if highest_target.map_or(true, |previous| target > previous) {
+                    highest_target = Some(target);
+                    selected_distances.push(distances[index] as f64);
+                    selected_residuals.push(residual);
+                }
+            }
+        }
+        if selected_distances.is_empty() {
+            continue;
+        }
+        let count = selected_distances.len();
+        let median_distance = -median_f64(&mut selected_distances);
+        let median_residual = -median_f64(&mut selected_residuals);
+        let score = (count, median_distance, median_residual);
+        if best.map_or(true, |(n, d, r, _, _)| score > (n, d, r)) {
+            best = Some((count, median_distance, median_residual, slope, offset));
+        }
+    }
+    if let Some((count, distance, residual, slope, offset)) = best {
+        out[..5].copy_from_slice(&[count as f64, distance, residual, slope, offset]);
+        1
+    } else {
+        0
+    }
+}
+
+/// Find monotone best matches in a local timestamp window for one offset.
+/// Writes `(source_index, target_index, hamming_distance)` triples.
+///
+/// # Safety
+/// Each hash and timestamp pointer must reference its declared array length.
+/// `output` must contain `3 * source_len` writable u32 values and must not
+/// alias either source or target. Target timestamps must be nondecreasing.
+#[no_mangle]
+pub unsafe extern "C" fn dubsync_verify_offset(
+    source_hashes: *const u64,
+    source_times: *const f64,
+    source_len: usize,
+    target_hashes: *const u64,
+    target_times: *const f64,
+    target_len: usize,
+    shift: f64,
+    tolerance: f64,
+    output: *mut u32,
+    output_len: usize,
+) -> isize {
+    if source_len > MAX_SAMPLES || target_len > MAX_SAMPLES
+        || output_len < 3 * source_len || !shift.is_finite()
+        || !tolerance.is_finite() || tolerance <= 0.0
+    {
+        return -1;
+    }
+    if source_len == 0 || target_len == 0 {
+        return 0;
+    }
+    if source_hashes.is_null() || source_times.is_null() || target_hashes.is_null()
+        || target_times.is_null() || output.is_null()
+    {
+        return -1;
+    }
+    let source_hashes = std::slice::from_raw_parts(source_hashes, source_len);
+    let source_times = std::slice::from_raw_parts(source_times, source_len);
+    let target_hashes = std::slice::from_raw_parts(target_hashes, target_len);
+    let target_times = std::slice::from_raw_parts(target_times, target_len);
+    let out = std::slice::from_raw_parts_mut(output, output_len);
+    if source_times.iter().any(|t| !t.is_finite()) || target_times.iter().any(|t| !t.is_finite())
+        || target_times.windows(2).any(|w| w[0] > w[1])
+    {
+        return -1;
+    }
+    let mut matches = 0usize;
+    let mut next_target = 0usize;
+    for (source_index, (&hash, &time)) in source_hashes.iter().zip(source_times).enumerate() {
+        let predicted = time + shift;
+        let j = target_times.partition_point(|&timestamp| timestamp < predicted);
+        let start = next_target.max(j.saturating_sub(2));
+        let end = target_len.min(j.saturating_add(3));
+        let mut best: Option<(u32, f64, usize)> = None;
+        for target_index in start..end {
+            let phase = (target_times[target_index] - predicted).abs();
+            if phase > tolerance {
+                continue;
+            }
+            let distance = (hash ^ target_hashes[target_index]).count_ones();
+            if distance > 18 {
+                continue;
+            }
+            let candidate = (distance, phase, target_index);
+            if best.map_or(true, |old| candidate < old) {
+                best = Some(candidate);
+            }
+        }
+        if let Some((distance, _, target_index)) = best {
+            let index = matches * 3;
+            out[index] = source_index as u32;
+            out[index + 1] = target_index as u32;
+            out[index + 2] = distance;
+            matches += 1;
+            next_target = target_index + 1;
+        }
+    }
+    matches as isize
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -315,5 +535,77 @@ mod tests {
             dubsync_offset_candidates(std::ptr::null(), 0, std::ptr::null(), 0,
                                       std::ptr::null(), std::ptr::null_mut(), 0)
         }, 0);
+    }
+
+    #[test]
+    fn affine_hypotheses_rank_by_matches_then_median_with_deterministic_ties() {
+        let source_indices = [0u32, 1, 2, 3];
+        let target_indices = [0u32, 1, 2, 3];
+        let distances = [1u8, 0, 0, 2];
+        let source_times = [0.0f64, 1.0, 2.0, 3.0];
+        let target_times = [3.0f64, 4.0, 5.0, 6.0];
+        let hypotheses = [1.0f64, 0.0, 1.0, 3.0, 1.0, 3.0];
+        let mut output = [0.0f64; 5];
+        let result = unsafe {
+            dubsync_best_affine(
+                source_indices.as_ptr(), target_indices.as_ptr(), distances.as_ptr(),
+                source_times.as_ptr(), target_times.as_ptr(), 4, 4,
+                hypotheses.as_ptr(), 3, 0.85, output.as_mut_ptr(), 5,
+            )
+        };
+        assert_eq!(result, 1);
+        assert_eq!(output, [4.0, -0.5, 0.0, 1.0, 3.0]);
+    }
+
+    #[test]
+    fn affine_rejects_more_than_two_candidates_per_source() {
+        let indices = [0u32, 0, 0];
+        let distances = [0u8, 0, 0];
+        let times = [0.0f64, 0.0, 0.0];
+        let hypotheses = [1.0f64, 0.0];
+        let mut output = [0.0f64; 5];
+        let result = unsafe {
+            dubsync_best_affine(
+                indices.as_ptr(), indices.as_ptr(), distances.as_ptr(),
+                times.as_ptr(), times.as_ptr(), 3, 2,
+                hypotheses.as_ptr(), 1, 0.85, output.as_mut_ptr(), 5,
+            )
+        };
+        assert_eq!(result, -1);
+    }
+
+    #[test]
+    fn offset_verifier_finds_best_monotone_targets() {
+        let hashes = [5u64, 10, 15, 20];
+        let times = [0.0f64, 1.0, 2.0, 3.0];
+        let target_hashes = [100u64, 5, 10, 15, 20];
+        let target_times = [0.0f64, 3.0, 4.0, 5.0, 6.0];
+        let mut output = [0u32; 12];
+        let count = unsafe {
+            dubsync_verify_offset(
+                hashes.as_ptr(), times.as_ptr(), hashes.len(),
+                target_hashes.as_ptr(), target_times.as_ptr(), target_hashes.len(),
+                3.0, 0.9, output.as_mut_ptr(), output.len(),
+            )
+        };
+        assert_eq!(count, 4);
+        assert_eq!(output, [0, 1, 0, 1, 2, 0, 2, 3, 0, 3, 4, 0]);
+    }
+
+    #[test]
+    fn offset_verifier_rejects_invalid_bounds() {
+        let hash = [0u64];
+        let time = [0.0f64];
+        let mut output = [0u32; 3];
+        assert_eq!(unsafe {
+            dubsync_verify_offset(hash.as_ptr(), time.as_ptr(), 1,
+                                  hash.as_ptr(), time.as_ptr(), 1,
+                                  0.0, 0.85, output.as_mut_ptr(), 2)
+        }, -1);
+        assert_eq!(unsafe {
+            dubsync_verify_offset(std::ptr::null(), time.as_ptr(), 1,
+                                  hash.as_ptr(), time.as_ptr(), 1,
+                                  0.0, 0.85, output.as_mut_ptr(), 3)
+        }, -1);
     }
 }

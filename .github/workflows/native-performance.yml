@@ -1,0 +1,33 @@
+name: Native Rust performance parity
+
+on:
+  pull_request:
+    paths:
+      - 'native/**'
+      - 'dubsync/core/alignment.py'
+      - 'dubsync/core/native_match.py'
+      - 'scripts/benchmark_native.py'
+      - 'tests/test_native_match.py'
+      - '.github/workflows/native-performance.yml'
+  workflow_dispatch:
+
+jobs:
+  rust-native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install isolated core test dependencies
+        run: python -m pip install numpy opencv-python-headless
+      - name: Build and test Rust extension
+        run: |
+          rustup toolchain install stable --profile minimal
+          ./build-native.sh
+          cargo test --locked --manifest-path native/Cargo.toml
+      - name: Verify exact Python/Rust parity
+        run: python -m unittest tests.test_native_match tests.test_feature_fallback_fast tests.test_long_offset
+      - name: Benchmark all native hot paths
+        run: python scripts/benchmark_native.py

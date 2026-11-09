@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import ctypes
+import math
 import os
 import sys
+from array import array
 from functools import lru_cache
 from itertools import chain
 from pathlib import Path
@@ -41,6 +43,22 @@ def _library():
                                     ctypes.POINTER(ctypes.c_uint8),
                                     ctypes.POINTER(ctypes.c_uint32), ctypes.c_size_t]
             offset_scan.restype = ctypes.c_ssize_t
+        affine = getattr(lib, "dubsync_best_affine", None)
+        if affine is not None:
+            affine.argtypes = [ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_uint32),
+                               ctypes.POINTER(ctypes.c_uint8), ctypes.POINTER(ctypes.c_double),
+                               ctypes.POINTER(ctypes.c_double), ctypes.c_size_t, ctypes.c_size_t,
+                               ctypes.POINTER(ctypes.c_double), ctypes.c_size_t, ctypes.c_double,
+                               ctypes.POINTER(ctypes.c_double), ctypes.c_size_t]
+            affine.restype = ctypes.c_ssize_t
+        verifier = getattr(lib, "dubsync_verify_offset", None)
+        if verifier is not None:
+            verifier.argtypes = [ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_double),
+                                 ctypes.c_size_t, ctypes.POINTER(ctypes.c_uint64),
+                                 ctypes.POINTER(ctypes.c_double), ctypes.c_size_t,
+                                 ctypes.c_double, ctypes.c_double,
+                                 ctypes.POINTER(ctypes.c_uint32), ctypes.c_size_t]
+            verifier.restype = ctypes.c_ssize_t
         return lib
     except (AttributeError, OSError):
         return None
@@ -128,3 +146,108 @@ def native_offset_candidates(source_hashes: list[int], target_hashes: list[int],
         return None
     return [(int(output[3 * i]), int(output[3 * i + 1]), int(output[3 * i + 2]))
             for i in range(count)]
+
+
+def native_best_affine(candidates: list[tuple[int, int, int, float, float]],
+                       source_count: int, hypotheses: list[tuple[float, float]],
+                       tolerance: float, cancel_event=None
+                       ) -> list[tuple[tuple[int, float, float], float, float]] | None:
+    """Score hypotheses in cancellable Rust chunks; None requests NumPy fallback.
+
+    Preserves Python's lexicographic score and first-wins tie behavior. One
+    native call per 128 hypotheses amortizes FFI cost without starving cancel.
+    """
+    lib = _library()
+    score = getattr(lib, "dubsync_best_affine", None) if lib is not None else None
+    if score is None or not 0 < source_count <= 5000 or len(candidates) > 2 * source_count:
+        return None
+    if not candidates or not hypotheses:
+        return []
+    if not math.isfinite(tolerance) or tolerance <= 0 or any(
+        not (isinstance(si, int) and 0 <= si < source_count
+             and isinstance(ti, int) and 0 <= ti < 2**32
+             and isinstance(dist, int) and 0 <= dist <= 255
+             and math.isfinite(st) and math.isfinite(tt))
+        for si, ti, dist, st, tt in candidates
+    ):
+        return None
+    if any(not math.isfinite(slope) or not math.isfinite(offset)
+           for slope, offset in hypotheses):
+        return None
+    source_indices = array("I", (entry[0] for entry in candidates))
+    target_indices = array("I", (entry[1] for entry in candidates))
+    distances = array("B", (entry[2] for entry in candidates))
+    source_times = array("d", (entry[3] for entry in candidates))
+    target_times = array("d", (entry[4] for entry in candidates))
+    values = (
+        (ctypes.c_uint32 * len(candidates)).from_buffer(source_indices),
+        (ctypes.c_uint32 * len(candidates)).from_buffer(target_indices),
+        (ctypes.c_uint8 * len(candidates)).from_buffer(distances),
+        (ctypes.c_double * len(candidates)).from_buffer(source_times),
+        (ctypes.c_double * len(candidates)).from_buffer(target_times),
+    )
+    best = None
+    for start in range(0, len(hypotheses), 128):
+        if cancel_event is not None and cancel_event.is_set():
+            return None
+        chunk = hypotheses[start:start + 128]
+        flat = array("d", (value for hypothesis in chunk for value in hypothesis))
+        input_chunk = (ctypes.c_double * len(flat)).from_buffer(flat)
+        output = (ctypes.c_double * 5)()
+        count = score(*values, len(candidates), source_count,
+                      input_chunk, len(chunk), tolerance, output, len(output))
+        if count not in (0, 1):
+            return None
+        if count:
+            if not (1 <= output[0] <= source_count
+                    and -64 <= output[1] <= 0 and -tolerance <= output[2] <= 0
+                    and math.isfinite(output[3]) and math.isfinite(output[4])):
+                return None
+            item = ((int(output[0]), float(output[1]), float(output[2])),
+                    float(output[3]), float(output[4]))
+            if best is None or item[0] > best[0]:
+                best = item
+    return [best] if best is not None else []
+
+
+def prepare_native_offset_verifier(source, target):
+    """Prepare reused native input buffers for all offsets of one video pair."""
+    lib = _library()
+    verify = getattr(lib, "dubsync_verify_offset", None) if lib is not None else None
+    if verify is None or len(source) > 5000 or len(target) > 5000:
+        return None
+    if not source or not target:
+        return lambda _shift, _tolerance: []
+    if any(not isinstance(item.phash, int) or not 0 <= item.phash < 2**64
+           or not math.isfinite(item.time) for item in chain(source, target)):
+        return None
+    source_hashes = (ctypes.c_uint64 * len(source))(*(item.phash for item in source))
+    source_times = (ctypes.c_double * len(source))(*(item.time for item in source))
+    target_hashes = (ctypes.c_uint64 * len(target))(*(item.phash for item in target))
+    target_times = (ctypes.c_double * len(target))(*(item.time for item in target))
+
+    def match(shift: float, tolerance: float) -> list[tuple[int, int, int]] | None:
+        if not math.isfinite(shift) or not math.isfinite(tolerance) or tolerance <= 0:
+            return None
+        output = (ctypes.c_uint32 * (3 * len(source)))()
+        count = verify(source_hashes, source_times, len(source), target_hashes, target_times,
+                       len(target), shift, tolerance, output, len(output))
+        if count < 0 or count > len(source):
+            return None
+        result = [(int(output[3 * i]), int(output[3 * i + 1]), int(output[3 * i + 2]))
+                  for i in range(count)]
+        if any(source_index >= len(source) or target_index >= len(target) or distance > 18
+               or (i > 0 and (source_index <= result[i - 1][0]
+                              or target_index <= result[i - 1][1]))
+               for i, (source_index, target_index, distance) in enumerate(result)):
+            return None
+        return result
+
+    return match
+
+
+def native_verify_offset(source, target, shift: float, tolerance: float
+                         ) -> list[tuple[int, int, int]] | None:
+    """One offset's monotone local matches; legacy binaries use Python."""
+    verifier = prepare_native_offset_verifier(source, target)
+    return verifier(shift, tolerance) if verifier is not None else None

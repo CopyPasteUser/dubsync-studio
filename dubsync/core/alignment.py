@@ -25,8 +25,9 @@ from .ffmpeg_sampling import (SamplingBackendError, ffmpeg_sample,
                               choose_verified_decoder)
 from .frame_cache import FrameSampleCache, source_identity
 from .network import is_network_path
-from .native_match import (native_feature_candidates, native_offset_candidates,
-                           native_pairs)
+from .native_match import (native_best_affine, native_feature_candidates,
+                           native_offset_candidates, native_pairs,
+                           prepare_native_offset_verifier)
 from .performance import sampling_worker_policy, system_specs
 
 Progress = Callable[[str, int, int], None]
@@ -724,56 +725,58 @@ def _feature_anchor_fallback(source: list[FrameSample], target: list[FrameSample
                 offset = left[4] - slope * left[3]
                 hypotheses.add((round(slope, 6), round(offset, 3)))
 
-    # Each source contributes at most two candidates. Keep their indices in
-    # source order so every affine hypothesis can be evaluated without building
-    # and sorting thousands of Python dictionaries/lists.
-    first = np.full(len(source), -1, dtype=np.int32)
-    second = np.full(len(source), -1, dtype=np.int32)
-    for position, (source_index, *_rest) in enumerate(candidates):
-        if first[source_index] < 0:
-            first[source_index] = position
-        else:
-            second[source_index] = position
-    first_safe = np.maximum(first, 0)
-    second_safe = np.maximum(second, 0)
-    target_indices = np.asarray([item[1] for item in candidates], dtype=np.int32)
-    distances = np.asarray([item[2] for item in candidates], dtype=np.uint8)
-    source_times = np.asarray([item[3] for item in candidates], dtype=np.float64)
-    target_times = np.asarray([item[4] for item in candidates], dtype=np.float64)
-    first_distance = distances[first_safe]
-    second_distance = distances[second_safe]
-
     scoring_started = time.monotonic()
     best_model: tuple[tuple[int, float, float], float, float] | None = None
-    # Sorted hypotheses make equal-scoring choices reproducible across runs.
-    for slope, offset in sorted(hypotheses):
-        if cancel_event is not None and cancel_event.is_set():
-            raise AlignmentError("Frameabgleich abgebrochen.")
-        residuals = np.abs(target_times - (slope * source_times + offset))
-        first_residual = residuals[first_safe]
-        second_residual = residuals[second_safe]
-        valid_first = (first >= 0) & (first_residual <= tolerance)
-        valid_second = (second >= 0) & (second_residual <= tolerance)
-        choose_first = valid_first & (
-            ~valid_second | (first_distance < second_distance) |
-            ((first_distance == second_distance) & (first_residual <= second_residual))
-        )
-        selected = np.where(choose_first, first, np.where(valid_second, second, -1))
-        selected = selected[selected >= 0]
-        if not len(selected):
-            continue
-        # Greedily retain a target only if it exceeds the last retained one.
-        # That is exactly the strict prefix-maximum condition, but vectorized.
-        selected_targets = target_indices[selected]
-        prefix_max = np.maximum.accumulate(selected_targets)
-        keep = np.empty(len(selected), dtype=np.bool_)
-        keep[0] = True
-        keep[1:] = selected_targets[1:] > prefix_max[:-1]
-        unique = selected[keep]
-        score = (len(unique), -float(np.median(distances[unique])),
-                 -float(np.median(residuals[unique])))
-        if best_model is None or score > best_model[0]:
-            best_model = (score, slope, offset)
+    ordered_hypotheses = sorted(hypotheses)  # First model wins exact-score ties.
+    native_models = native_best_affine(candidates, len(source), ordered_hypotheses,
+                                      tolerance, cancel_event)
+    if cancel_event is not None and cancel_event.is_set():
+        raise AlignmentError("Frameabgleich abgebrochen.")
+    if native_models is not None:
+        best_model = native_models[0] if native_models else None
+    else:
+        # NumPy reference path supports older/missing native binaries.
+        first = np.full(len(source), -1, dtype=np.int32)
+        second = np.full(len(source), -1, dtype=np.int32)
+        for position, (source_index, *_rest) in enumerate(candidates):
+            if first[source_index] < 0:
+                first[source_index] = position
+            else:
+                second[source_index] = position
+        first_safe = np.maximum(first, 0)
+        second_safe = np.maximum(second, 0)
+        target_indices = np.asarray([item[1] for item in candidates], dtype=np.int32)
+        distances = np.asarray([item[2] for item in candidates], dtype=np.uint8)
+        source_times = np.asarray([item[3] for item in candidates], dtype=np.float64)
+        target_times = np.asarray([item[4] for item in candidates], dtype=np.float64)
+        first_distance = distances[first_safe]
+        second_distance = distances[second_safe]
+        for slope, offset in ordered_hypotheses:
+            if cancel_event is not None and cancel_event.is_set():
+                raise AlignmentError("Frameabgleich abgebrochen.")
+            residuals = np.abs(target_times - (slope * source_times + offset))
+            first_residual = residuals[first_safe]
+            second_residual = residuals[second_safe]
+            valid_first = (first >= 0) & (first_residual <= tolerance)
+            valid_second = (second >= 0) & (second_residual <= tolerance)
+            choose_first = valid_first & (
+                ~valid_second | (first_distance < second_distance) |
+                ((first_distance == second_distance) & (first_residual <= second_residual))
+            )
+            selected = np.where(choose_first, first, np.where(valid_second, second, -1))
+            selected = selected[selected >= 0]
+            if not len(selected):
+                continue
+            selected_targets = target_indices[selected]
+            prefix_max = np.maximum.accumulate(selected_targets)
+            keep = np.empty(len(selected), dtype=np.bool_)
+            keep[0] = True
+            keep[1:] = selected_targets[1:] > prefix_max[:-1]
+            unique = selected[keep]
+            score = (len(unique), -float(np.median(distances[unique])),
+                     -float(np.median(residuals[unique])))
+            if best_model is None or score > best_model[0]:
+                best_model = (score, slope, offset)
     hypothesis_scoring_seconds = round(time.monotonic() - scoring_started, 4)
 
     if best_model is None:
@@ -918,29 +921,41 @@ def _long_offset_alignment(
     distinct_required = max(16, int(math.ceil(sample_count * 0.06)))
     winning: AlignmentResult | None = None
     candidates_tested: list[dict] = []
+    native_verifier = prepare_native_offset_verifier(source, target)
     for shift in hypotheses:
         if cancel_event is not None and cancel_event.is_set():
             raise AlignmentError("Frameabgleich abgebrochen.")
         anchors: list[Anchor] = []
         matched_hashes: set[int] = set()
-        last_target_index = -1
-        for item in source:
-            predicted = item.time + shift
-            j = bisect_left(target_times, predicted)
-            matches = []
-            for target_index in range(max(last_target_index + 1, j - 2), min(m, j + 3)):
-                other = target[target_index]
-                phase_error = abs(other.time - predicted)
-                if phase_error > tolerance:
-                    continue
-                distance = (item.phash ^ other.phash).bit_count()
-                if distance <= 18:
-                    matches.append((distance, phase_error, target_index))
-            if matches:
-                distance, _, target_index = min(matches)
+        native_matches = native_verifier(shift, tolerance) if native_verifier else None
+        if cancel_event is not None and cancel_event.is_set():
+            raise AlignmentError("Frameabgleich abgebrochen.")
+        if native_matches is not None:
+            for source_index, target_index, distance in native_matches:
+                item = source[source_index]
                 anchors.append(Anchor(item.time, target[target_index].time, distance))
                 matched_hashes.add(item.phash)
-                last_target_index = target_index
+        else:
+            last_target_index = -1
+            for item in source:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise AlignmentError("Frameabgleich abgebrochen.")
+                predicted = item.time + shift
+                j = bisect_left(target_times, predicted)
+                matches = []
+                for target_index in range(max(last_target_index + 1, j - 2), min(m, j + 3)):
+                    other = target[target_index]
+                    phase_error = abs(other.time - predicted)
+                    if phase_error > tolerance:
+                        continue
+                    distance = (item.phash ^ other.phash).bit_count()
+                    if distance <= 18:
+                        matches.append((distance, phase_error, target_index))
+                if matches:
+                    distance, _, target_index = min(matches)
+                    anchors.append(Anchor(item.time, target[target_index].time, distance))
+                    matched_hashes.add(item.phash)
+                    last_target_index = target_index
         # A short matching intro/credits section or a collection of duplicated
         # stills must never establish synchronization for an entire episode.
         span = anchors[-1].source_time - anchors[0].source_time if anchors else 0.0
