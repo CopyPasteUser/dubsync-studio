@@ -40,6 +40,8 @@ def doctor_report() -> dict[str, Any]:
         "gpu_vendors_detected": specs["gpu_vendors"],
         "recommended_analysis_profile": recommended_profile(specs),
     }
+    from dubsync.core.native_match import _library
+    result["hardware"]["rust_frame_matcher"] = _library() is not None
     from dubsync.core.ffmpeg_sampling import (ffmpeg_hardware_accels, likely_gpu_accel,
                                               gpu_decode_candidates)
     result["hardware"]["ffmpeg_acceleration_interfaces"] = sorted(ffmpeg_hardware_accels())
@@ -321,6 +323,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  Sichtbarer RAM: {hardware['ram_gib_visible']:.1f} GiB")
             print(f"  Erkanntes GPU-Vendor: {', '.join(hardware['gpu_vendors_detected']) or 'nicht erkannt'}")
             print(f"  Empfohlenes Analyseprofil: {hardware['recommended_analysis_profile']}")
+            print(f"  Rust-Frame-Abgleich: {'verfügbar' if hardware['rust_frame_matcher'] else 'NumPy-Fallback'}")
             print("\nMedienwerkzeuge:")
             for name, info in report["media_tools"].items():
                 print(f"  {'OK' if info['available'] else 'FEHLT'}  {name}: {info.get('version', info.get('path', 'nicht gefunden'))}")

@@ -18,7 +18,7 @@ real media, GPUs or NAS mounts.
 | **4. Continuous A/B audio audition** | P2 | **Planned** | Bounded, synchronized playback/scrubbing with cancel, source selection and no silent export authorization; keyboard access and resource caps. |
 | **5. Adaptive throughput tuning** | P2 | **Partially implemented** | Compare single/two-worker and CPU/GPU timings on local media, record speed, RAM and NAS I/O; adapt only worker/decoder resources, never sample density or export safety. |
 | **6. Independent scene-boundary evidence** | P2 | **Planned** | Confirm complicated cuts using an independent visual signal; fail closed on disagreements, keep reproducible proof diagnostics and a reference corpus. |
-| **7. Optional Rust engine experiment** | P3 | **Conditional** | Profile real episodes first; port only a measured Python-bound hotspot, compare correctness and end-to-end speed against existing NumPy/OpenCV, preserve Python/Qt fallback. |
+| **7. Optional Rust engine experiment** | P3 | **Implemented; physical QA pending** | Monotone DP hot path ported with zero external crates, parity tests and benchmark; Python/Qt and NumPy fallback preserved. Confirm end-to-end speed/packaging on reference hardware before making native mandatory. |
 
 Suggested order: complete the physical 3.0 acceptance gates, then the candidate
 explorer and audition tools. Optimization work should be driven by recorded

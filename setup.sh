@@ -66,6 +66,11 @@ export PIP_DISABLE_PIP_VERSION_CHECK=1
 .venv/bin/python -m pip install --upgrade pip
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python -m compileall -q dubsync
+if [[ "${DUBSYNC_BUILD_NATIVE:-1}" != "0" ]] && command -v cargo >/dev/null 2>&1; then
+  if ! ./build-native.sh; then
+    echo "Warnung: Rust-Engine konnte nicht gebaut werden; NumPy-Fallback bleibt nutzbar." >&2
+  fi
+fi
 printf '\nSetup abgeschlossen.\n'
 printf 'Portable starten: ./run.sh\n'
 printf 'Dauerhaft installieren (Anwendungsmenü): ./install.sh\n'
