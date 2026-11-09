@@ -15,6 +15,9 @@ PREFERENCE_KEYS = frozenset({
     "organize_output",
     "performance",
     "high_contrast",
+    "subtitle_mode",
+    "subtitle_language",
+    "subtitle_model",
 })
 
 

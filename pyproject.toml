@@ -35,6 +35,8 @@ dubsync-studio-gui = "dubsync.gui.main_window:main"
 
 [project.optional-dependencies]
 test = ["tomli>=2.0; python_version < '3.11'", "pytest>=8.0,<9", "pytest-qt>=4.4,<5"]
+subtitle-search = ["subliminal>=2.7,<3"]
+subtitle-fast = ["whisper-ctranslate2>=0.5.7,<0.6"]
 
 [tool.setuptools.packages.find]
 include = ["dubsync*"]

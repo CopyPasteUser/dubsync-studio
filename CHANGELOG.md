@@ -1,5 +1,33 @@
 # Unreleased · Headless workflow and resource safety (2026-11-09)
 
+- Optional, switchable SRT tracks in verified MKV exports, both for individual
+  episodes and persistent batch jobs. Video and existing streams are copied;
+  no subtitles are burned into the image and no video re-encoding is needed.
+- Subtitle sources: sidecars alongside the picture master, embedded text tracks,
+  an explicitly chosen SRT/ASS/VTT file, optional Subliminal online search, or
+  optional local Whisper/whisper.cpp transcription. Automatic mode tries these
+  in order and fails visibly if none can produce valid subtitles.
+- Additional subtitle acquisition: ZIP sidecars and individually selected ZIPs,
+  an independent SubDL search (environment-provided API key), and manually
+  selected video captions via yt-dlp (single export). The automatic fallback
+  order now exhausts local sources and both online providers before Whisper;
+  subtitle requests use bounded downloads and avoid arbitrary ZIP extraction.
+- Automatic subtitle lookup offers a separate **find only** mode without AI
+  transcription. SubDL now ranks release names and checks at most three
+  candidate subtitle files, retrying when conversion or timing is invalid.
+  Whisper backend/model availability is now checked before decoding the
+  picture master's full audio track, avoiding expensive doomed attempts.
+- Export progress now identifies the active subtitle source and explicitly
+  signals when the last-resort Whisper phase begins.
+- Subtitle speed profile: SubDL is searched before Subliminal when configured;
+  Subliminal uses up to four workers and a stronger candidate match threshold.
+  Optional batched CTranslate2/Whisper inference uses int8 and automatically
+  scales batch size to available RAM, with whisper.cpp and Python Whisper
+  available as fallbacks on the same extracted audio. Optional pip extras
+  install the online search and fast transcription backends.
+- Temporary transcription files are cleaned up; failures/cancellations preserve
+  old output and sources. Batch resume recipes now include subtitle settings.
+
 - Read-only CLI library inspection with repeated `--scan-library` roots and JSON
   output. Reuses existing episode grouping and excludes generated export folders;
   filename matches are explicitly not accepted as visual synchronization proof.

@@ -23,7 +23,7 @@ def _digest(value: Any) -> str:
 def recipe_id(*, output_directory: str, organize_by_series: bool,
               alignment_options: dict, roots: list[str] | None,
               root_languages: dict | None, track_overrides: dict | None,
-              master_overrides: dict | None) -> str:
+              master_overrides: dict | None, subtitle_options: dict | None = None) -> str:
     """Invalidate resumption when any output-affecting choice changes."""
     return _digest({
         "output_directory": str(Path(output_directory).resolve()),
@@ -32,6 +32,7 @@ def recipe_id(*, output_directory: str, organize_by_series: bool,
         "roots": roots or [], "root_languages": root_languages or {},
         "track_overrides": track_overrides or {},
         "master_overrides": master_overrides or {},
+        "subtitle_options": subtitle_options or {},
     })
 
 

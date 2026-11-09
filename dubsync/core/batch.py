@@ -15,6 +15,7 @@ from .batch_resume import (recipe_id, proof_for, load_resume_report,
 from .alignment import align_videos
 from .cache import AlignmentCache
 from .export import export_multilingual
+from .subtitles import SubtitleOptions
 from .models import EpisodeGroup, MediaInfo, TrackChoice
 from .languages import normalize_language_code, resolve_track_label
 from .probe import MediaToolError, choose_default_audio, probe_media
@@ -236,6 +237,7 @@ def batch_export_groups(
     overwrite_existing: bool = False,
     media_cache: dict[str, MediaInfo] | None = None,
     alignment_options: dict | None = None,
+    subtitle_options: dict | None = None,
     track_overrides: dict[str, dict] | None = None,
     master_overrides: dict[str, str] | None = None,
     manual_section_sources: set[str] | None = None,
@@ -255,12 +257,15 @@ def batch_export_groups(
     # decide which episode is fused into a new output.
     cache_enabled = False
     audio_bitrate_kbps = max(64, min(320, int(alignment_options.get("audio_bitrate_kbps", 128))))
+    subtitles = SubtitleOptions(**(subtitle_options or {}))
+    if subtitles.mode == "file":
+        raise ValueError("Eine globale Untertiteldatei ist im Serien-Stapel nicht zulässig.")
     output_dir = Path(output_directory).expanduser().resolve()
     resume_recipe = recipe_id(
         output_directory=str(output_dir), organize_by_series=organize_by_series,
         alignment_options=alignment_options, roots=roots,
         root_languages=root_languages, track_overrides=track_overrides,
-        master_overrides=master_overrides)
+        master_overrides=master_overrides, subtitle_options=subtitle_options)
     # Resolve and validate the selected run before creating an output folder.
     resume_entries = (load_resume_report(resume_from_journal, resume_recipe)
                       if resume_from_journal is not None else [])
@@ -415,7 +420,8 @@ def batch_export_groups(
                     progress=lambda pct, msg: announce(idx - 1, total,
                         f"{destination['group'].display_name}: {msg} {pct}%"),
                     cancel_event=cancel_event,
-                    audio_bitrate_kbps=audio_bitrate_kbps)
+                    audio_bitrate_kbps=audio_bitrate_kbps,
+                    subtitle_options=subtitles)
             except Exception as exc:
                 if cancelled():
                     raise BatchCancelled("Korrekturexport abgebrochen") from exc
@@ -861,6 +867,7 @@ def batch_export_groups(
                 progress=lambda pct, msg: progress(index - 1, total, f"{group.display_name}: {msg} {pct}%") if progress else None,
                 cancel_event=cancel_event,
                 audio_bitrate_kbps=audio_bitrate_kbps,
+                subtitle_options=subtitles,
             )
             report["exported"].append(created)
             journal.conclude(index, "exported", f"{len(tracks)} Audiospuren erfolgreich ausgerichtet",

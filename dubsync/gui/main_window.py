@@ -40,6 +40,7 @@ from dubsync.core.batch import (output_path_for_group, choose_smallest_video, es
 from dubsync.core.cache import AlignmentCache
 from dubsync.core.session import persistent_preferences
 from dubsync.core.export import ExportError, export_multilingual
+from dubsync.core.subtitles import SubtitleOptions
 from dubsync.core.fingerprint import fingerprint_many
 from dubsync.core.models import (AlignmentResult, EpisodeGroup, MediaInfo, TrackChoice,
                                  TimelineSegment, validate_timeline_layout)
@@ -1313,6 +1314,12 @@ class MainWindow(QMainWindow):
         self._track_override_timer.timeout.connect(self._persist_track_overrides)
         self.output_directory = str(self.settings.get("output_directory", Path.home() / "Videos" / "DubSync Output"))
         self.organize_output = bool(self.settings.get("organize_output", True))
+        self.subtitle_mode = str(self.settings.get("subtitle_mode", "off"))
+        if self.subtitle_mode in {"file", "url"}:
+            # The corresponding path is deliberately not persisted across sessions.
+            self.subtitle_mode = "off"
+        self.subtitle_language = str(self.settings.get("subtitle_language", "auto"))
+        self.subtitle_model = str(self.settings.get("subtitle_model", "small"))
         # Old releases silently skipped existing outputs, which made a rerun appear
         # to start at E04/E05. Default to an explicit fresh rebuild instead.
         self.skip_existing = False
@@ -1596,6 +1603,58 @@ class MainWindow(QMainWindow):
         self.root_languages_button.clicked.connect(self.configure_root_languages)
         output_options.addWidget(self.root_languages_button)
         output_layout.addLayout(output_options)
+
+        subtitle_options = QHBoxLayout()
+        subtitle_options.addWidget(QLabel("Optionale Untertitelspur"))
+        self.subtitle_mode_combo = QComboBox()
+        for label, mode in (
+            ("Aus (unveränderter Untertitelbestand)", "off"),
+            ("Automatisch: lokal → MKV → Anbieter → Whisper", "auto"),
+            ("Nur finden: lokal → MKV → Anbieter (ohne KI)", "existing"),
+            ("Datei neben dem Bildmaster", "sidecar"),
+            ("ZIP neben dem Bildmaster", "archive"),
+            ("Eingebettete Textspur im Bildmaster", "embedded"),
+            ("Online-Suche (Subliminal + SubDL)", "download"),
+            ("SubDL direkt (API-Schlüssel)", "subdl"),
+            ("Untertitel von Video-URL (yt-dlp, einzeln)", "url"),
+            ("Lokal erzeugen (Whisper)", "generate"),
+            ("Eigene Untertiteldatei / ZIP (nur Einzelexport)", "file"),
+        ):
+            self.subtitle_mode_combo.addItem(label, mode)
+        self.subtitle_mode_combo.setCurrentIndex(max(0, self.subtitle_mode_combo.findData(self.subtitle_mode)))
+        self.subtitle_mode_combo.setToolTip(
+            "Fügt eine frei zuschaltbare SRT-Spur zur MKV hinzu. Videobild und Originalton "
+            "bleiben ohne Neukodierung. Automatisch: vorhandene Untertitel zuerst, KI nur zuletzt."
+        )
+        self.subtitle_mode_combo.currentIndexChanged.connect(self._subtitle_options_changed)
+        subtitle_options.addWidget(self.subtitle_mode_combo, 1)
+        self.subtitle_language_combo = QComboBox()
+        for label, code in LANGUAGE_CHOICES:
+            self.subtitle_language_combo.addItem(label, code)
+        self.subtitle_language_combo.setCurrentIndex(max(0, self.subtitle_language_combo.findData(self.subtitle_language)))
+        self.subtitle_language_combo.setToolTip(
+            "Online-Suche braucht eine Sprache. Whisper transkribiert die Tonspur des Bildmasters; "
+            "es übersetzt sie nicht automatisch."
+        )
+        self.subtitle_language_combo.currentIndexChanged.connect(self._subtitle_options_changed)
+        subtitle_options.addWidget(self.subtitle_language_combo)
+        self.subtitle_model_combo = QComboBox()
+        for name in ("tiny", "base", "small", "medium", "large", "turbo"):
+            self.subtitle_model_combo.addItem(f"Whisper {name}", name)
+        self.subtitle_model_combo.setCurrentIndex(max(0, self.subtitle_model_combo.findData(self.subtitle_model)))
+        self.subtitle_model_combo.currentIndexChanged.connect(self._subtitle_options_changed)
+        subtitle_options.addWidget(self.subtitle_model_combo)
+        output_layout.addLayout(subtitle_options)
+        subtitle_file_row = QHBoxLayout()
+        self.subtitle_file_edit = QLineEdit()
+        self.subtitle_file_edit.setPlaceholderText("Eigene .srt / .ass / .vtt / .zip (nur Einzelexport)")
+        self.subtitle_file_edit.setAccessibleName("Externe Untertiteldatei")
+        subtitle_file_row.addWidget(self.subtitle_file_edit, 1)
+        self.subtitle_file_button = QPushButton("Untertitel wählen …")
+        self.subtitle_file_button.clicked.connect(self._choose_subtitle_file)
+        subtitle_file_row.addWidget(self.subtitle_file_button)
+        output_layout.addLayout(subtitle_file_row)
+        self._subtitle_options_changed()
 
         self.output_preview_label = QLabel("Ausgabepfad-Vorschau erscheint nach dem Bibliotheksscan.")
         self.output_preview_label.setObjectName("pathPreview")
@@ -3424,6 +3483,10 @@ class MainWindow(QMainWindow):
         if hasattr(self, "organize_output_check"):
             self.organize_output = self.organize_output_check.isChecked()
             self.settings["organize_output"] = self.organize_output
+        if hasattr(self, "subtitle_mode_combo"):
+            self.settings["subtitle_mode"] = self.subtitle_mode_combo.currentData()
+            self.settings["subtitle_language"] = self.subtitle_language_combo.currentData()
+            self.settings["subtitle_model"] = self.subtitle_model_combo.currentData()
         # Intentionally do not persist roots, root_languages, track_overrides,
         # master_overrides, last_project_path or skip_existing. Old values from
         # earlier releases are stripped on the first 1.5.11 launch, not reused.
@@ -3434,6 +3497,33 @@ class MainWindow(QMainWindow):
     def _output_options_changed(self, *_args):
         self._save_settings()
         self._update_output_preview()
+
+    def _subtitle_options_changed(self, *_args):
+        mode = self.subtitle_mode_combo.currentData()
+        self.subtitle_file_edit.setEnabled(mode in {"file", "url"})
+        self.subtitle_file_button.setEnabled(mode == "file")
+        self.subtitle_model_combo.setEnabled(mode in {"auto", "generate"})
+        self.subtitle_file_edit.setPlaceholderText(
+            "HTTPS-Adresse des Videos mit Untertiteln (kein Video-Download)"
+            if mode == "url" else "Eigene .srt / .ass / .vtt / .zip (nur Einzelexport)")
+        self.subtitle_file_edit.setAccessibleName(
+            "Video-Adresse für Untertitel" if mode == "url" else "Externe Untertiteldatei")
+        self._save_settings()
+
+    def _choose_subtitle_file(self):
+        chosen, _ = QFileDialog.getOpenFileName(
+            self, "Untertitel auf Bildmaster-Zeitachse wählen", "",
+            "Untertitel (*.srt *.ass *.ssa *.vtt *.zip)")
+        if chosen:
+            self.subtitle_file_edit.setText(chosen)
+
+    def _subtitle_options(self) -> SubtitleOptions:
+        return SubtitleOptions(
+            mode=self.subtitle_mode_combo.currentData(),
+            language=self.subtitle_language_combo.currentData(),
+            file_path=self.subtitle_file_edit.text().strip(),
+            whisper_model=self.subtitle_model_combo.currentData(),
+        )
 
     def browse_output_directory(self):
         start = self.output_dir_edit.text().strip() or str(Path.home() / "Videos")
@@ -4388,6 +4478,12 @@ class MainWindow(QMainWindow):
         )
 
     def export_batch(self):
+        if self.subtitle_mode_combo.currentData() in {"file", "url"}:
+            QMessageBox.warning(self, "Untertiteldatei nur für Einzelexport",
+                                "Eine einzelne Untertiteldatei oder Video-URL kann nicht sicher auf eine "
+                                "ganze Staffel angewendet werden. Wähle für Stapel automatische Suche, "
+                                "lokale Dateien/ZIPs, eingebettete Spuren, Online-Suche oder Whisper.")
+            return
         if not self.groups:
             QMessageBox.information(self, "Keine Bibliothek", "Scanne zunächst mindestens einen Medienordner.")
             return
@@ -4450,6 +4546,8 @@ class MainWindow(QMainWindow):
             f"Tracknamen-Regeln: {len(root_rules)}\n"
             "Bildmaster: automatisch kleinste Videodatei je Episode (Laufzeit/Auflösung folgen dieser Datei)\n"
             f"Zusatz-Audio: AAC {self.performance_settings['audio_bitrate_kbps']} kbit/s\n"
+            f"Untertitel: {self.subtitle_mode_combo.currentText()} · "
+            f"{self.subtitle_language_combo.currentText()}\n"
             f"Bereits fertig überspringen: {'Ja' if skip_existing else 'Nein'}\n"
             f"Sichere Fortsetzung: {Path(self._resume_journal_path).name if self._resume_journal_path else 'Nein'}\n\n"
             "Ein Stapelprotokoll verifiziert nur bereits abgeschlossene MKVs. "
@@ -4488,6 +4586,11 @@ class MainWindow(QMainWindow):
             "track_overrides": dict(self.track_overrides),
             "master_overrides": dict(self.master_overrides),
             "manual_section_sources": sorted({source for _, source in self.manual_segment_overrides}),
+            "subtitle_options": {
+                "mode": self._subtitle_options().mode,
+                "language": self._subtitle_options().language,
+                "whisper_model": self._subtitle_options().whisper_model,
+            },
             "alignment_options": {
                 "interval": self.performance_settings["sample_interval"],
                 "max_samples": self.performance_settings["max_samples"],
@@ -4673,6 +4776,7 @@ class MainWindow(QMainWindow):
                 progress=lambda percent, message: report(message, percent, 100),
                 cancel_event=cancel,
                 audio_bitrate_kbps=self.performance_settings["audio_bitrate_kbps"],
+                subtitle_options=self._subtitle_options(),
             ),
             self._export_done,
         )

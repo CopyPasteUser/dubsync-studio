@@ -11,6 +11,7 @@ from typing import Callable
 from .models import AlignmentResult, MediaInfo, TrackChoice, validate_timeline_layout
 from .languages import normalize_language_code
 from .probe import MediaToolError, probe_media, require_media_tools
+from .subtitles import SubtitleError, SubtitleOptions, prepare_subtitles
 
 Progress = Callable[[int, str], None]
 
@@ -19,7 +20,8 @@ class ExportError(RuntimeError):
     pass
 
 
-def _verify_mux_output(master: MediaInfo, checked: MediaInfo, added_audio: int) -> None:
+def _verify_mux_output(master: MediaInfo, checked: MediaInfo, added_audio: int,
+                       *, added_subtitles: int = 0) -> None:
     """Reject missing or changed copied streams before promoting the output."""
     if checked.video_streams != 1:
         raise ExportError("Exportprüfung fehlgeschlagen: genau ein Master-Videostream erwartet.")
@@ -44,12 +46,15 @@ def _verify_mux_output(master: MediaInfo, checked: MediaInfo, added_audio: int) 
             raise ExportError("Exportprüfung fehlgeschlagen: bestehendes Audiokanal-Layout wurde verändert.")
     if any(stream.codec_name != "aac" for stream in checked.audio[master.audio_streams:]):
         raise ExportError("Exportprüfung fehlgeschlagen: neue Audiospur hat einen unerwarteten Codec.")
-    if checked.subtitle_streams != master.subtitle_streams:
+    if checked.subtitle_streams != master.subtitle_streams + added_subtitles:
         raise ExportError("Exportprüfung fehlgeschlagen: Untertitelspuren fehlen.")
+    output_subtitles = [s for s in checked.streams if s.codec_type == "subtitle"]
     if any(source.codec_name != output.codec_name
            for source, output in zip((s for s in master.streams if s.codec_type == "subtitle"),
-                                     (s for s in checked.streams if s.codec_type == "subtitle"))):
+                                     output_subtitles)):
         raise ExportError("Exportprüfung fehlgeschlagen: Untertitel-Codec wurde verändert.")
+    if any(stream.codec_name != "subrip" for stream in output_subtitles[master.subtitle_streams:]):
+        raise ExportError("Exportprüfung fehlgeschlagen: neue SRT-Untertitelspur fehlt.")
     if sum(s.codec_type == "attachment" for s in checked.streams) != sum(
             s.codec_type == "attachment" for s in master.streams):
         raise ExportError("Exportprüfung fehlgeschlagen: Dateianhänge fehlen.")
@@ -118,6 +123,7 @@ def export_multilingual(
     progress: Progress | None = None,
     cancel_event=None,
     audio_bitrate_kbps: int = 128,
+    subtitle_options: SubtitleOptions | None = None,
 ) -> str:
     """Mux extra audio tracks into the master video, aligning by an affine time map.
 
@@ -171,6 +177,7 @@ def export_multilingual(
     if not selected:
         raise ExportError("Keine zusätzlichen Audiospuren ausgewählt.")
 
+    include_subtitles = subtitle_options is not None and subtitle_options.mode != "off"
     output.parent.mkdir(parents=True, exist_ok=True)
     if output.exists() and not overwrite:
         raise ExportError(f"Ausgabe wurde inzwischen angelegt: {output}")
@@ -229,11 +236,34 @@ def export_multilingual(
     # Das Mastervideo bleibt kopiert. Vorhandene Master-Audios und Untertitel werden
     # ebenfalls kopiert; nur die neu synchronisierten Audiospuren werden neu codiert.
     command = [ffmpeg, "-hide_banner", "-nostdin", "-y", "-v", "warning", "-progress", "pipe:1", "-nostats"]
+    subtitle_directory = None
+    try:
+        if include_subtitles:
+            subtitle_directory = tempfile.TemporaryDirectory(prefix="dubsync-sub-")
+            if progress:
+                progress(0, "Untertitel suchen / erzeugen …")
+            captions = prepare_subtitles(master, master_info, subtitle_options,
+                                         Path(subtitle_directory.name), ffmpeg, cancel_event,
+                                         progress=(lambda message: progress(0, message)) if progress else None)
+            input_args.extend(["-i", str(captions)])
+    except (SubtitleError, OSError) as exc:
+        if subtitle_directory is not None:
+            subtitle_directory.cleanup()
+        raise ExportError(f"Untertitel konnten nicht vorbereitet werden: {exc}") from exc
+
     command += input_args
     command += ["-map", "0:v:0", "-map", "0:a?", "-map", "0:s?", "-map", "0:t?"]
     for index in range(len(selected)):
         command += ["-map", f"[{f'dub{index}'}]"]
-    command += ["-map_metadata", "0", "-map_chapters", "0", "-c:v", "copy", "-c:a", "copy", "-c:s", "copy", "-c:t", "copy"]
+    if include_subtitles:
+        command += ["-map", f"{len(selected) + 1}:s:0"]
+    command += ["-map_metadata", "0", "-map_chapters", "0", "-c:v", "copy",
+                "-c:a", "copy", "-c:s", "copy", "-c:t", "copy"]
+    if include_subtitles:
+        command += [f"-metadata:s:s:{master_info.subtitle_streams}",
+                    f"language={_language_code(subtitle_options.language)}",
+                    f"-metadata:s:s:{master_info.subtitle_streams}", "title=Untertitel",
+                    f"-disposition:s:{master_info.subtitle_streams}", "0"]
     for index in range(len(selected)):
         output_audio_index = master_audio_count + index
         command += [f"-c:a:{output_audio_index}", "aac", f"-b:a:{output_audio_index}", f"{audio_bitrate_kbps}k"]
@@ -276,7 +306,8 @@ def export_multilingual(
                             try:
                                 seconds = float(value) / 1_000_000.0
                                 percent = min(99, max(0, int(100 * seconds / master_info.duration)))
-                                progress(percent, "Muxing und Synchronisation …")
+                                progress(percent, "Untertitelspur und Audios muxen …"
+                                         if include_subtitles else "Muxing und Synchronisation …")
                             except (ValueError, ZeroDivisionError):
                                 pass
                 finally:
@@ -291,7 +322,7 @@ def export_multilingual(
         if progress:
             progress(98, "Prüfe exportierte Datei …")
         checked = probe_media(str(temporary))
-        _verify_mux_output(master_info, checked, len(selected))
+        _verify_mux_output(master_info, checked, len(selected), added_subtitles=int(include_subtitles))
 
         if output.exists() and not overwrite:
             raise ExportError(f"Die Ausgabedatei existiert inzwischen: {output}")
@@ -302,6 +333,8 @@ def export_multilingual(
     except OSError as exc:
         raise ExportError(f"Datei- oder Prozessfehler beim Export: {exc}") from exc
     finally:
+        if subtitle_directory is not None:
+            subtitle_directory.cleanup()
         if process is not None and process.poll() is None:
             process.terminate()
         if temporary.exists():

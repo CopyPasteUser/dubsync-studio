@@ -23,6 +23,9 @@ class FreshSessionTests(unittest.TestCase):
             "high_contrast": True,
             "output_directory": "/mnt/output",
             "organize_output": False,
+            "subtitle_mode": "sidecar",
+            "subtitle_language": "deu",
+            "subtitle_model": "small",
         }
         result = persistent_preferences(old)
         self.assertEqual(set(result), PREFERENCE_KEYS)
@@ -30,6 +33,9 @@ class FreshSessionTests(unittest.TestCase):
         self.assertFalse(result["organize_output"])
         self.assertEqual(result["performance"], {"max_samples": 1200})
         self.assertTrue(result["high_contrast"])
+        self.assertEqual(result["subtitle_mode"], "sidecar")
+        self.assertEqual(result["subtitle_language"], "deu")
+        self.assertEqual(result["subtitle_model"], "small")
         self.assertIn("roots", old, "Must not destructively modify input")
 
     def test_empty_or_invalid_settings(self):
