@@ -179,7 +179,8 @@ class PerformanceSettingTests(unittest.TestCase):
 
     def test_parallel_sampling_never_reads_network_mounts_concurrently(self):
         strong = {"logical_cpus": 12, "ram_gib": 24}
-        with patch("dubsync.core.network.is_network_path", side_effect=lambda path: path.startswith("/nas")):
+        with (patch("dubsync.core.network.is_network_path", side_effect=lambda path: path.startswith("/nas")),
+              patch("dubsync.core.performance.available_memory_gib", return_value=8.)):
             count, reason = sampling_worker_policy("/local/source.mkv", "/nas/master.mkv",
                                                    2, "ffmpeg", strong)
             self.assertEqual(count, 1)
@@ -191,6 +192,7 @@ class PerformanceSettingTests(unittest.TestCase):
     def test_auto_gpu_benchmark_is_not_distorted_by_parallel_decode(self):
         strong = {"logical_cpus": 12, "ram_gib": 24}
         with (patch("dubsync.core.network.is_network_path", return_value=False),
+              patch("dubsync.core.performance.available_memory_gib", return_value=8.),
               patch("dubsync.core.ffmpeg_sampling.likely_gpu_accel", return_value="vaapi")):
             count, reason = sampling_worker_policy("source.mkv", "master.mkv", 2, "auto", strong)
         self.assertEqual(count, 1)
@@ -200,6 +202,16 @@ class PerformanceSettingTests(unittest.TestCase):
         weak = {"logical_cpus": 2, "ram_gib": 6}
         with patch("dubsync.core.network.is_network_path", return_value=False):
             self.assertEqual(sampling_worker_policy("s", "m", 2, "ffmpeg", weak)[0], 1)
+
+    def test_parallel_sampling_rechecks_live_memory_each_episode(self):
+        strong = {"logical_cpus": 12, "ram_gib": 24}
+        with (patch("dubsync.core.network.is_network_path", return_value=False),
+              patch("dubsync.core.performance.available_memory_gib", side_effect=[1.2, 5., None])):
+            workers, reason = sampling_worker_policy("s", "m", 2, "ffmpeg", strong)
+            self.assertEqual(workers, 1)
+            self.assertIn("freier RAM", reason)
+            self.assertEqual(sampling_worker_policy("s", "m", 2, "ffmpeg", strong)[0], 2)
+            self.assertEqual(sampling_worker_policy("s", "m", 2, "ffmpeg", strong)[0], 2)
 
     def test_intel_vaapi_is_shown_only_with_matching_render_node(self):
         with (patch("dubsync.core.performance.sys.platform", "linux"),

@@ -124,6 +124,10 @@ def summarize_diagnostic(payload: dict[str, Any]) -> str:
                 lines.append(f"{label}: FFmpeg · {stage.get('samples_collected', '?')} Bildproben · "
                              f"Decoder-Wunsch {stage.get('selected_gpu_candidate') or stage.get('selected_decoder', '?')} "
                              "(Hardware-Ausführung nicht nachgewiesen)")
+                if (isinstance(stage.get("gpu_benchmark_seconds"), (int, float)) and
+                        isinstance(stage.get("decode_seconds"), (int, float))):
+                    lines.append(f"  GPU-Prüfung {stage['gpu_benchmark_seconds']:.3f}s · "
+                                 f"vollständige Decodierung {stage['decode_seconds']:.3f}s")
             else:
                 lines.append(f"{label}: {stage.get('status', 'unbekannt')} · {stage.get('frames_grabbed', '?')} Frames gelesen · "
                              f"{stage.get('samples_collected', '?')} Bildproben · letzte Position "

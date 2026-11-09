@@ -1,5 +1,18 @@
 # Unreleased · Headless workflow and resource safety (2026-11-09)
 
+- Adaptive decoder preflight: long-form H.264/HEVC now samples one CPU/GPU
+  window first and runs later windows only for candidates still able to pass
+  the mandatory per-window visual and ≥90%-of-CPU speed gates. Rejected
+  candidates and their CPU reference stop early, avoiding up to four of six
+  probe launches for a single unsuitable GPU; a viable GPU still receives all
+  three independent checks. The final ≥15% overall advantage, NAS exclusion,
+  full-stream fallback, and codec-scoped hint revalidation are unchanged.
+- Decoder worker policy rechecks actual available host/cgroup memory on each
+  pair and uses serial sampling below 2 GiB of headroom. Diagnostics now
+  separate automatic GPU comparison time from full-video decoding time and
+  show current memory headroom; CPU-vs-GPU and runtime throughput on actual
+  Intel/NVIDIA/AMD hardware remain physical acceptance tasks.
+
 - Automatic GPU decoder selection now tests three distributed, accurately
   seeked 6–8-second windows on local H.264/HEVC media of at least 15 minutes,
   instead of relying only on the introduction. Every window must match CPU

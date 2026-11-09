@@ -148,10 +148,12 @@ def sample_video(path: str, duration: float, interval: float = 0.5,
         raise ValueError("Sampleintervall muss zwischen 0,5 und 15 Sekunden liegen")
     mode = (hardware_accel or "auto").strip().lower()
     # FFmpeg scales frames before they cross the process boundary. This avoids
-    # Python/OpenCV handling every full-resolution decoded frame. Auto measures
-    # GPU vs CPU on a short prefix before selecting hardware for long videos.
+    # Python/OpenCV handling every full-resolution decoded frame. Auto first
+    # measures a short CPU/GPU prefix and verifies surviving long-form GPU
+    # candidates against later windows before full decoding.
     if mode in {"auto", "ffmpeg", "cuda", "vaapi", "amd-vaapi", "intel-vaapi", "d3d11"}:
         ffmpeg_started = time.monotonic()
+        gpu_probe_seconds = 0.0
         benchmark = None
         selected_gpu = None
         selected_candidate = None
@@ -172,10 +174,12 @@ def sample_video(path: str, duration: float, interval: float = 0.5,
                                  (video_codec or "").lower() in {"h264", "hevc", "h265"})
                     probe_starts = ((0.0, duration * .48, duration * .80)
                                     if long_h26x else (0.0,))
+                    probe_started = time.monotonic()
                     benchmark = benchmark_decoder_candidates(
                         path, duration, interval, perceptual_hash,
                         candidates=measured_candidates, cancel_event=cancel_event,
                         seconds=probe_seconds, probe_starts=probe_starts)
+                    gpu_probe_seconds = time.monotonic() - probe_started
                     winner = choose_verified_decoder(benchmark, measured_candidates)
                     if winner is not None:
                         selected_gpu, gpu_device = winner.accel, winner.device
@@ -204,6 +208,7 @@ def sample_video(path: str, duration: float, interval: float = 0.5,
                     detail = (f"GPU {selected_candidate or selected_gpu.upper()} angefordert"
                               if selected_gpu else "CPU über FFmpeg")
                     progress(f"{side}: {detail} · Frames direkt auf 32×32 reduziert", 0, 0)
+                decode_started = time.monotonic()
                 try:
                     hashes = ffmpeg_sample(path, duration, interval, perceptual_hash,
                                            accel=selected_gpu, device=gpu_device, cancel_event=cancel_event,
@@ -228,6 +233,7 @@ def sample_video(path: str, duration: float, interval: float = 0.5,
                     hashes = ffmpeg_sample(path, duration, interval, perceptual_hash,
                                            accel=None, device=None, cancel_event=cancel_event,
                                            progress=progress, side=side, decode_threads=decode_threads)
+                decode_seconds = time.monotonic() - decode_started
                 samples = [FrameSample(timestamp, phash) for timestamp, phash in hashes]
                 if diagnostic is not None:
                     elapsed = time.monotonic() - ffmpeg_started
@@ -244,6 +250,8 @@ def sample_video(path: str, duration: float, interval: float = 0.5,
                         hardware_execution_verified=False,
                         # FFmpeg may silently transfer from or fall back to system RAM.
                         benchmark=benchmark, interval_s=round(interval, 4),
+                        gpu_benchmark_seconds=round(gpu_probe_seconds, 4),
+                        decode_seconds=round(decode_seconds, 4),
                         metadata_duration_s=round(duration, 4), samples_collected=len(samples),
                         first_sample_s=samples[0].time, last_sample_s=samples[-1].time,
                         elapsed_s=round(elapsed, 4), unique_hashes=unique,

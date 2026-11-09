@@ -308,67 +308,107 @@ def benchmark_decoder_candidates(path: str, duration: float, interval: float,
     """Compare CPU and every GPU on identical frames, without repeating CPU work.
 
     Sequential measurements avoid two adapters fighting over memory bandwidth.
-    For long videos, callers can require parity and useful speed in several
-    independent windows; an intro alone never establishes GPU suitability.
+    A candidate that already fails a mandatory first-window gate cannot win a
+    later three-window check, so it must not trigger extra CPU/GPU decoding.
     """
-    if (not math.isfinite(seconds) or seconds <= 0 or not probe_starts or
+    if (not math.isfinite(duration) or duration <= 0 or not math.isfinite(seconds)
+            or seconds <= 0 or not probe_starts or
             any(not math.isfinite(start) or start < 0 or
                 start + min(seconds, duration) > duration + .001 for start in probe_starts)):
         raise ValueError("Ungültige Decoder-Prüfabschnitte.")
     results: dict[str, dict[str, float | int | str]] = {}
     reference_windows: list[list[tuple[float, int]]] = []
-    for candidate in [None, *candidates]:
+    reference_speeds: list[float] = []
+    # Internal accumulators avoid rounded values in the early rejection gate.
+    collected: dict[str, dict] = {}
+
+    def take_window(candidate: DecoderCandidate | None, index: int) -> float:
         name = candidate.key if candidate is not None else "cpu"
-        if candidate is not None and len(reference_windows) != len(probe_starts):
-            results[name] = {"error": "CPU-Referenz unvollständig."}
-            continue
+        start = probe_starts[index]
+        started = time.monotonic()
+        frames = ffmpeg_sample(path, duration, interval, fingerprint,
+                               accel=candidate.accel if candidate else None,
+                               device=candidate.device if candidate else None,
+                               start_seconds=start, limit_seconds=min(seconds, duration - start),
+                               cancel_event=cancel_event, stall_timeout=15.0)
+        elapsed = max(0.001, time.monotonic() - started)
+        if len(frames) < 4:
+            raise SamplingBackendError("Zu wenige Bilder für den Decodervergleich.")
+        speed = len(frames) / elapsed
+        state = collected.setdefault(name, {"count": 0, "elapsed": 0., "speeds": [],
+                                            "distances": [], "matched": 0})
+        if candidate is None:
+            reference_windows.append(frames)
+            reference_speeds.append(speed)
+        else:
+            reference = reference_windows[index]
+            limit = min(len(reference), len(frames))
+            distances = [(reference[i][1] ^ frames[i][1]).bit_count()
+                         for i in range(limit)]
+            near = sum(value <= 16 for value in distances)
+            if (abs(len(reference) - len(frames)) > 1 or
+                    near / max(len(reference), len(frames)) < .95 or
+                    (sorted(distances)[limit // 2] if limit else 99) > 10):
+                raise SamplingBackendError("GPU-Bildparität in einem Prüfabschnitt unzureichend.")
+            state["matched"] += near
+            state["distances"].extend(distances)
+        state["count"] += len(frames)
+        state["elapsed"] += elapsed
+        state["speeds"].append(speed)
+        return speed
+
+    def report(name: str) -> dict[str, float | int | str]:
+        state = collected[name]
+        result: dict[str, float | int | str] = {
+            "frames": state["count"], "seconds": round(state["elapsed"], 3),
+            "samples_per_second": round(state["count"] / state["elapsed"], 2),
+            "probe_windows": len(state["speeds"]),
+        }
+        if name != "cpu":
+            result["frame_match_ratio"] = round(
+                state["matched"] / max(state["count"], sum(map(len, reference_windows))), 3)
+            distances = state["distances"]
+            result["median_hamming_to_cpu"] = int(sorted(distances)[len(distances) // 2])
+            result["worst_window_speed_ratio"] = round(
+                min(speed / reference for speed, reference in
+                    zip(state["speeds"], reference_speeds)), 3)
+        return result
+
+    def try_window(candidate: DecoderCandidate | None, index: int) -> bool:
+        name = candidate.key if candidate is not None else "cpu"
         try:
-            elapsed = 0.0
-            count = 0
-            window_speeds = []
-            distances = []
-            matched = 0
-            for index, start in enumerate(probe_starts):
-                started = time.monotonic()
-                frames = ffmpeg_sample(path, duration, interval, fingerprint,
-                                       accel=candidate.accel if candidate else None,
-                                       device=candidate.device if candidate else None,
-                                       start_seconds=start, limit_seconds=min(seconds, duration - start),
-                                       cancel_event=cancel_event, stall_timeout=15.0)
-                window_elapsed = max(0.001, time.monotonic() - started)
-                elapsed += window_elapsed
-                count += len(frames)
-                if len(frames) < 4:
-                    raise SamplingBackendError("Zu wenige Bilder für den Decodervergleich.")
-                if candidate is None:
-                    reference_windows.append(frames)
-                    window_speeds.append(len(frames) / window_elapsed)
-                else:
-                    reference = reference_windows[index]
-                    limit = min(len(reference), len(frames))
-                    differences = [(reference[i][1] ^ frames[i][1]).bit_count()
-                                   for i in range(limit)]
-                    if (abs(len(reference) - len(frames)) > 1 or
-                            sum(value <= 16 for value in differences) / max(len(reference), len(frames)) < .95 or
-                            (sorted(differences)[limit // 2] if limit else 99) > 10):
-                        raise SamplingBackendError("GPU-Bildparität in einem Prüfabschnitt unzureichend.")
-                    matched += sum(value <= 16 for value in differences)
-                    distances.extend(differences)
-                    window_speeds.append(len(frames) / window_elapsed)
-            results[name] = {"frames": count, "seconds": round(elapsed, 3),
-                             "samples_per_second": round(count / elapsed, 2),
-                             "probe_windows": len(probe_starts)}
-            if candidate is None:
-                reference_speeds = window_speeds
-            else:
-                results[name]["frame_match_ratio"] = round(matched / max(count, sum(map(len, reference_windows))), 3)
-                results[name]["median_hamming_to_cpu"] = int(sorted(distances)[len(distances) // 2])
-                results[name]["worst_window_speed_ratio"] = round(
-                    min(speed / reference for speed, reference in zip(window_speeds, reference_speeds)), 3)
+            speed = take_window(candidate, index)
         except SamplingBackendError as exc:
             if cancel_event is not None and cancel_event.is_set():
                 raise
-            results[name] = {"error": str(exc)}
+            results[name] = {"error": str(exc), "probe_windows": index + 1}
+            return False
+        if candidate is not None and round(speed / reference_speeds[index], 3) < .90:
+            results[name] = {"error": "GPU in einem Prüfabschnitt mehr als 10 % langsamer als CPU.",
+                             "probe_windows": index + 1}
+            return False
+        return True
+
+    if not try_window(None, 0):
+        for candidate in candidates:
+            results[candidate.key] = {"error": "CPU-Referenz unvollständig."}
+        return results
+
+    # One inexpensive prefix per GPU, then distributed checks only for viable
+    # candidates. Rejected candidates cannot satisfy the final worst-window gate.
+    active = [candidate for candidate in candidates if try_window(candidate, 0)]
+    for index in range(1, len(probe_starts)):
+        if not active and candidates:
+            break
+        if not try_window(None, index):
+            for candidate in active:
+                results[candidate.key] = {"error": "CPU-Referenz unvollständig."}
+            return results
+        active = [candidate for candidate in active if try_window(candidate, index)]
+
+    results["cpu"] = report("cpu")
+    for candidate in active:
+        results[candidate.key] = report(candidate.key)
     return results
 
 
