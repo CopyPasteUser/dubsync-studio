@@ -43,6 +43,18 @@ class QueueTests(unittest.TestCase):
             self.assertEqual(self.queue.path.stat().st_mode & 0o777, 0o600)
             self.assertEqual(self.queue.path.parent.stat().st_mode & 0o777, 0o700)
 
+    def test_queue_summary_aggregates_all_states_without_private_paths(self):
+        first = self.enqueue()
+        second = self.enqueue()
+        self.queue._update(second, state="failed", error_text="Private: /secret/video.mkv")
+        summary = self.queue.summary(limit=1)
+        self.assertEqual(summary["total"], 2)
+        self.assertEqual(summary["by_state"], {"queued": 1, "failed": 1})
+        self.assertEqual(len(summary["recent"]), 1)
+        self.assertEqual(summary["recent"][0]["id"], second)
+        self.assertNotIn("/secret/", json.dumps(summary))
+        self.assertNotIn("spec", summary["recent"][0])
+
     def test_recovers_interrupted_and_paused_without_auto_running(self):
         first = self.enqueue()
         second = self.enqueue()
@@ -160,6 +172,16 @@ class AdaptiveResourcesTests(unittest.TestCase):
         self.assertIn("CPU", reason)
         self.assertEqual(busy["max_samples"], fast["max_samples"])
         self.assertEqual(busy["hardware_accel"], requested["hardware_accel"])
+
+    def test_container_memory_pressure_limits_workers_without_changing_recipe(self):
+        requested = {"sampling_workers": 2, "max_samples": 1400, "hardware_accel": "auto"}
+        with patch("dubsync.core.performance.available_memory_gib", return_value=1.5):
+            capped, reason = adaptive_resource_options(
+                requested, specs={"logical_cpus": 12, "ram_gib": 16}, load_average=0)
+        self.assertEqual(capped["sampling_workers"], 1)
+        self.assertIn("RAM", reason)
+        self.assertEqual(capped["max_samples"], requested["max_samples"])
+        self.assertEqual(capped["hardware_accel"], requested["hardware_accel"])
 
 
 class RestartIntegrationTests(unittest.TestCase):

@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import importlib.util
 import json
 import os
 import platform
 import shutil
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -81,6 +83,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--list-alignments", action="store_true", help="Bis zu 40 Bildabgleichberichte auflisten.")
     parser.add_argument("--latest-batch", action="store_true", help="Gesamtprotokoll des neuesten Stapels anzeigen (ALLE Folgen).")
     parser.add_argument("--list-batches", action="store_true", help="Gesamtprotokolle der letzten Stapel anzeigen.")
+    parser.add_argument("--queue-status", action="store_true", help="Warteschlange nur lesend zusammenfassen (ohne Medienpfade).")
+    parser.add_argument("--scan-library", metavar="ORDNER", action="append",
+                        help="Videobibliothek ohne GUI scannen; für mehrere Ordner wiederholen (kein Export).")
     parser.add_argument("--benchmark-decode", metavar="VIDEO", help="CPU/GPU-Dekodierleistung für ein lokales Video messen (nur lesend).")
     parser.add_argument("--profile-alignment", nargs=2, metavar=("QUELLE", "MASTER"),
                         help="Vollständigen Bildabgleich und Laufzeiten für zwei Videos prüfen (kein Export).")
@@ -95,10 +100,56 @@ def main(argv: list[str] | None = None) -> int:
                         default="auto", help="GPU-Backend im Decoder-Benchmark gezielt wählen.")
     parser.add_argument("--json", action="store_true", help="Diagnose maschinenlesbar als JSON ausgeben (mit --doctor).")
     args = parser.parse_args(argv)
-    if args.json and not (args.doctor or args.latest_alignment or args.list_alignments or args.latest_batch or args.list_batches or args.benchmark_decode or args.profile_alignment):
+    requested = (args.doctor, args.latest_alignment, args.list_alignments, args.latest_batch,
+                 args.list_batches, args.queue_status, bool(args.scan_library),
+                 args.benchmark_decode, args.profile_alignment)
+    if args.json and not any(requested):
         parser.error("--json erfordert eine Diagnoseoption.")
-    if sum(bool(value) for value in (args.doctor, args.latest_alignment, args.list_alignments, args.latest_batch, args.list_batches, args.benchmark_decode, args.profile_alignment)) > 1:
+    if sum(bool(value) for value in requested) > 1:
         parser.error("Bitte nur eine Diagnosefunktion gleichzeitig auswählen.")
+    if args.scan_library:
+        from dubsync.core.scanner import scan_directories
+        try:
+            roots = list(dict.fromkeys(str(Path(value).expanduser().resolve()) for value in args.scan_library))
+        except OSError as exc:
+            print(f"Bibliotheksordner kann nicht aufgelöst werden: {exc}", file=sys.stderr)
+            return 2
+        for root in roots:
+            if not Path(root).is_dir():
+                print(f"Bibliotheksordner ist nicht zugänglich: {root}", file=sys.stderr)
+                return 2
+        try:
+            groups = scan_directories(roots)
+        except (OSError, RuntimeError) as exc:
+            print(f"Bibliotheksscan fehlgeschlagen: {exc}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps({"episodes": len(groups), "files": sum(len(group.files) for group in groups),
+                              "groups": [asdict(group) for group in groups]}, ensure_ascii=False, indent=2))
+        else:
+            print(f"Bibliothek: {len(groups)} Episodengruppen, {sum(len(g.files) for g in groups)} Videodateien")
+            for group in groups:
+                print(f"  {group.display_name} ({len(group.files)} Fassungen)")
+                for path in group.files:
+                    print(f"    {path}")
+        return 0
+    if args.queue_status:
+        from dubsync.core.job_queue import BatchJobQueue, default_queue_path
+        path = default_queue_path()
+        try:
+            summary = (BatchJobQueue(path).summary() if path.is_file()
+                       else {"total": 0, "by_state": {}, "recent": []})
+        except (OSError, sqlite3.Error) as exc:
+            print(f"Warteschlange ist nicht lesbar: {exc}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(summary, ensure_ascii=False, indent=2))
+        else:
+            states = ", ".join(f"{state}: {count}" for state, count in sorted(summary["by_state"].items()))
+            print(f"Warteschlange: {summary['total']} Aufträge ({states or 'leer'})")
+            for row in summary["recent"]:
+                print(f"  {row['state']} | #{row['id'][:8]} | {row['progress_current']}/{row['progress_total']}")
+        return 0
     if args.profile_alignment:
         from dubsync.core.alignment import align_videos
         from dubsync.core.alignment_diagnostics import summarize_diagnostic

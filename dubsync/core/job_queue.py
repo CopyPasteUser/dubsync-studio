@@ -90,7 +90,7 @@ def adaptive_resource_options(options: dict, *, specs: dict | None = None,
     This is sampled once per fresh job and persisted: a recovered job retains
     the same complete export recipe required by its prior journal.
     """
-    from .performance import system_specs
+    from .performance import available_memory_gib, system_specs
     hardware = specs if specs is not None else system_specs()
     logical = max(1, int(hardware.get("logical_cpus", 1)))
     ram = float(hardware.get("ram_gib", 4))
@@ -100,14 +100,8 @@ def adaptive_resource_options(options: dict, *, specs: dict | None = None,
             load_average = os.getloadavg()[0]
         except (AttributeError, OSError):
             load_average = 0.0
-    if available_ram_gib is None and os.name == "posix":
-        try:
-            for line in Path("/proc/meminfo").read_text(encoding="ascii").splitlines():
-                if line.startswith("MemAvailable:"):
-                    available_ram_gib = int(line.split()[1]) / (1024**2)
-                    break
-        except (OSError, ValueError, IndexError):
-            pass
+    if available_ram_gib is None:
+        available_ram_gib = available_memory_gib()
     available = ram if available_ram_gib is None else min(ram, available_ram_gib)
     settings = dict(options)
     if requested == 1:
@@ -203,6 +197,17 @@ class BatchJobQueue:
                 FROM batch_jobs ORDER BY created_at DESC,rowid DESC LIMIT ?""",
                 (max(1, min(200, int(limit))),)).fetchall()
         return [dict(row) for row in rows]
+
+    def summary(self, limit: int = 10) -> dict[str, Any]:
+        """Read-only queue overview without media paths or private error logs."""
+        with self._db() as db:
+            counts = {row["state"]: row["count"] for row in db.execute(
+                "SELECT state, COUNT(*) AS count FROM batch_jobs GROUP BY state")}
+            rows = db.execute("""SELECT id,state,updated_at,progress_current,progress_total
+                FROM batch_jobs ORDER BY created_at DESC,rowid DESC LIMIT ?""",
+                (max(1, min(50, int(limit))),)).fetchall()
+        return {"total": sum(counts.values()), "by_state": counts,
+                "recent": [dict(row) for row in rows]}
 
     def recover_interrupted(self) -> int:
         with self._db() as db:

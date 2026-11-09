@@ -23,6 +23,7 @@ DubSync Studio separates Qt presentation from media processing:
 - `dubsync/core/project.py`: schema-validated `.dubsync` project files and atomic writes; includes source rules, per-track settings/corrections and master overrides.
 - `dubsync/core/history.py`: persistent SQLite job history, bounded valid-JSON metadata, deterministic newest-first ordering and interrupted-job recovery.
 - `dubsync/core/job_queue.py`: persistent per-batch job specifications and state, explicit restart/retry actions, journal ownership and conservative CPU/RAM concurrency budgets. Unlike the read-only job history, a queue entry can be executed again with full media revalidation.
+- `dubsync/cli.py`: GUI-independent doctor, media profiling, filename-only library inspection and a private-path-free queue summary. CLI scan results are **not** export evidence.
 - `dubsync/core/logging_setup.py`: per-user rotating log and exception hooks.
 - `dubsync/cli.py`: headless version and environment diagnostics without importing Qt unless launching the GUI.
 
@@ -69,6 +70,12 @@ settings time. Concurrent workers keep independent in-memory fingerprint caches
 and short-lived SQLite connections; parallel FFmpeg runs divide the visible
 logical-thread budget. If either worker fails, the sibling receives a local
 cancellation signal and the alignment fails safely.
+
+At the start of a new queued batch, the resource budget also uses the smaller
+of Linux `MemAvailable` and the remaining cgroup v1/v2 memory allowance. This
+guards containerized jobs against competing with other processes under the same
+limit. Once the batch is claimed, its effective options are persisted unchanged
+to preserve safe, recipe-bound resume behavior.
 
 Linux VAAPI can select a sysfs-verified AMD (`0x1002`) or Intel (`0x8086`)
 DRM render node. Node selection is not proof of real hardware decoding; a

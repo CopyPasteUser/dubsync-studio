@@ -10,6 +10,8 @@ from unittest.mock import patch
 
 from dubsync.cli import VERSION, doctor_report, main
 from dubsync.core.ffmpeg_sampling import DecoderCandidate
+from dubsync.core.job_queue import BatchJobQueue
+from dubsync.core.models import EpisodeGroup
 
 
 class CliTests(unittest.TestCase):
@@ -68,6 +70,47 @@ class CliTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertEqual(benchmark.call_args.kwargs["candidates"], candidates)
             self.assertEqual(set(json.loads(captured.getvalue())["measurements"]), set(measured))
+
+    def test_headless_scan_groups_editions_without_media_decoding(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "Show.S01E01.German.mkv").write_bytes(b"edition 1")
+            (root / "Show.S01E01.English.mp4").write_bytes(b"edition 2")
+            (root / "DubSync_Output").mkdir()
+            (root / "DubSync_Output" / "Show.S01E02.mkv").write_bytes(b"output")
+            captured = io.StringIO()
+            with patch("sys.stdout", captured):
+                exit_code = main(["--scan-library", temp, "--scan-library", temp, "--json"])
+            self.assertEqual(exit_code, 0)
+            result = json.loads(captured.getvalue())
+            self.assertEqual((result["episodes"], result["files"]), (1, 2))
+            self.assertEqual(result["groups"][0]["season_number"], 1)
+            self.assertEqual(len(result["groups"][0]["files"]), 2)
+
+    def test_headless_scan_rejects_unavailable_directory(self):
+        with tempfile.TemporaryDirectory() as temp:
+            with patch("sys.stderr", io.StringIO()):
+                self.assertEqual(main(["--scan-library", str(Path(temp) / "missing")]), 2)
+
+    def test_queue_status_is_private_and_does_not_create_an_empty_queue(self):
+        with tempfile.TemporaryDirectory() as temp, patch.dict("os.environ", {"XDG_STATE_HOME": temp}):
+            captured = io.StringIO()
+            with patch("sys.stdout", captured):
+                self.assertEqual(main(["--queue-status", "--json"]), 0)
+            self.assertEqual(json.loads(captured.getvalue())["total"], 0)
+            queue_path = Path(temp) / "dubsync-studio" / "batch-queue.sqlite3"
+            self.assertFalse(queue_path.exists())
+            private_path = str(Path(temp) / "private-video.mkv")
+            queue = BatchJobQueue(queue_path)
+            queue.enqueue([EpisodeGroup("show|s01e001", "Show S01E01", [private_path])],
+                          str(Path(temp) / "output"), label=f"Private batch: {private_path}")
+            captured = io.StringIO()
+            with patch("sys.stdout", captured):
+                self.assertEqual(main(["--queue-status", "--json"]), 0)
+            result = json.loads(captured.getvalue())
+            self.assertEqual(result["by_state"], {"queued": 1})
+            self.assertEqual(result["recent"][0]["state"], "queued")
+            self.assertNotIn(private_path, captured.getvalue())
 
 
 if __name__ == "__main__":

@@ -15,11 +15,46 @@ from dubsync.core.performance import (
     settings_for_preset,
     supported_hardware_modes,
     apply_cpu_thread_limit, system_specs, recommended_profile, sampling_worker_policy,
-    auto_decoder_summary,
+    auto_decoder_summary, available_memory_gib,
 )
 
 
 class PerformanceSettingTests(unittest.TestCase):
+    def test_available_memory_respects_cgroup_v2_remaining_budget(self):
+        gib = 1024**3
+        contents = {
+            "/proc/meminfo": f"MemTotal: {32 * gib // 1024} kB\nMemAvailable: {20 * gib // 1024} kB\n",
+            "/sys/fs/cgroup/memory.max": str(8 * gib),
+            "/sys/fs/cgroup/memory.current": str(7 * gib),
+        }
+
+        def read_fake(path, *args, **kwargs):
+            if str(path) not in contents:
+                raise FileNotFoundError(path)
+            return contents[str(path)]
+
+        with patch.object(Path, "read_text", read_fake):
+            self.assertAlmostEqual(available_memory_gib(), 1.0)
+
+    def test_available_memory_falls_back_to_cgroup_v1_or_host(self):
+        gib = 1024**3
+        contents = {
+            "/proc/meminfo": f"MemAvailable: {5 * gib // 1024} kB\n",
+            "/sys/fs/cgroup/memory.max": "max",
+            "/sys/fs/cgroup/memory/memory.limit_in_bytes": str(10 * gib),
+            "/sys/fs/cgroup/memory/memory.usage_in_bytes": str(8 * gib),
+        }
+
+        def read_fake(path, *args, **kwargs):
+            if str(path) not in contents:
+                raise FileNotFoundError(path)
+            return contents[str(path)]
+
+        with patch.object(Path, "read_text", read_fake):
+            self.assertAlmostEqual(available_memory_gib(), 2.0)
+            contents.pop("/sys/fs/cgroup/memory/memory.limit_in_bytes")
+            self.assertAlmostEqual(available_memory_gib(), 5.0)
+
     def test_default_profile_is_system_adaptive_and_cache_disabled_for_fresh_exports(self):
         settings = default_performance_settings()
         specs = system_specs()
