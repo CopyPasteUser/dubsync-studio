@@ -93,6 +93,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Vollständigen Bildabgleich und Laufzeiten für zwei Videos prüfen (kein Export).")
     parser.add_argument("--explore-episode", nargs="+", metavar="VIDEO",
                         help="MASTER und 1–8 mögliche Fassungen visuell vergleichen (nur Prüfung, keine Neuzuordnung).")
+    parser.add_argument("--benchmark-workers", nargs=2, metavar=("QUELLE", "MASTER"),
+                        help="1 vs. 2 Decoder an demselben Videopaar messen, Bildanker-Gleichheit prüfen (kein Export).")
     parser.add_argument("--profile-workers", choices=(1, 2), type=int, default=1,
                         help="Video-Decoder für --profile-alignment: 1 oder 2 (NAS bleibt seriell).")
     parser.add_argument("--profile-decoder", choices=("auto", "none", "ffmpeg", "cuda", "vaapi",
@@ -106,7 +108,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     requested = (args.doctor, args.latest_alignment, args.list_alignments, args.latest_batch,
                  args.list_batches, args.queue_status, bool(args.scan_library),
-                 args.benchmark_decode, args.profile_alignment, args.explore_episode)
+                 args.benchmark_decode, args.profile_alignment, args.explore_episode,
+                 args.benchmark_workers)
     if args.json and not any(requested):
         parser.error("--json erfordert eine Diagnoseoption.")
     if sum(bool(value) for value in requested) > 1:
@@ -179,6 +182,31 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  #{candidate['candidate']} {candidate['filename']}: {candidate['status']}{quality}")
             print("Nur Sichtprüfung – keine automatische Neuzuordnung oder Exportfreigabe.")
         return 0 if report["verdict"] == "single_visual_candidate" else 1
+    if args.benchmark_workers:
+        from dubsync.core.worker_benchmark import compare_sampling_workers
+        source, master = (Path(value).expanduser().resolve() for value in args.benchmark_workers)
+        if source == master or not source.is_file() or not master.is_file():
+            print("Bitte zwei verschiedene, lesbare Videodateien wählen.", file=sys.stderr)
+            return 2
+        try:
+            report = compare_sampling_workers(
+                str(source), str(master), hardware_accel=args.profile_decoder)
+        except (OSError, ValueError, RuntimeError) as exc:
+            print(f"Decodervergleich fehlgeschlagen: {exc}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            for run in report["runs"]:
+                print(f"{run['requested_workers']} Decoder angefordert · "
+                      f"{run['effective_workers']} aktiv · Sampling {run['sampling_seconds']:.3f} s")
+            factor = report["sampling_speedup"]
+            print(f"Faktor: {factor:.2f}×" if factor is not None else "Faktor: nicht messbar")
+            print(f"Bildanker gleich: {report['visual_anchor_parity']} · "
+                  f"Exportentscheidung gleich: {report['safety_decision_parity']}")
+            print(f"Empfehlung: {report['suggested_workers']} Decoder · {report['note']}")
+            print("Nur Benchmark – keine automatische Profiländerung oder Exportfreigabe.")
+        return 0 if report["visual_anchor_parity"] and report["safety_decision_parity"] else 1
     if args.profile_alignment:
         from dubsync.core.alignment import align_videos
         from dubsync.core.alignment_diagnostics import summarize_diagnostic

@@ -564,3 +564,13 @@ Native workspace redesign, centralized Qt theme, collapsible sources, honest pen
   includes A/B timing, cache eviction, cancellation and temporary file cleanup.
 - Seamless full-length streaming and real sound-device QA remain future work;
   audio never supplies visual-match or export authorization.
+
+# Unreleased · Measured decoder concurrency (2026-11-09)
+
+- `--benchmark-workers SOURCE MASTER [--json]` runs the same full visual
+  analysis with one and two requested decoder workers, bypassing the frame
+  cache so actual sampling work is measured.
+- Reports enforced worker counts, sample/total wall times and strict anchor/
+  export-decision parity; suggests parallel decoding only on matching evidence
+  and at least 15% measured improvement. No automatic preferences or safety
+  changes. Physical NAS, memory and long-load benchmarks remain outstanding.
