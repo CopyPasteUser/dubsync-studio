@@ -1,5 +1,22 @@
 # DubSync Studio 3.0.0b1 development verification
 
+## Current Studio documentation captures (2026-11-09)
+
+- Run `QT_QPA_PLATFORM=offscreen ./.venv/bin/python scripts/capture_studio_2.py`
+  to reproduce six `docs/screenshots/*-4.png` screenshots in an isolated Qt
+  session. The current output covers the three-pane workbench, expanded
+  evidence monitor, illustrative A/B waveforms, batch control, performance
+  presets and compact 980 × 680 layout.
+- The focus capture uses a 1440 × 1180 window so the cursor-specific evidence
+  label and issue navigator are visible without scrolling. The compact image
+  documents the smaller viewport with its existing scroll behavior.
+- All images contain **synthetic episode metadata and evidence**, and the
+  waveforms are drawn from deterministic functions. No real media, user's
+  settings, NAS data or export targets are read or modified by the harness.
+- Full local suite after the evidence-status sprint: **422 passed, 12 skipped**.
+  The physical screen, GPU, audio backend, network failure and real-media
+  acceptance items below remain open.
+
 ## 3.0 beta checks (2026-11-02)
 
 - `QT_QPA_PLATFORM=offscreen python -m pytest -q`: 269 passed, 1 skipped
@@ -71,4 +88,4 @@
   variants; inspect actual desktop-entry icons and shortcuts.
 
 The official release gate list is in [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md)
-and the planned 2.0 milestones in [ROADMAP_2_0.md](ROADMAP_2_0.md).
+and current priorities in [STUDIO_OVERHAUL.md](STUDIO_OVERHAUL.md).

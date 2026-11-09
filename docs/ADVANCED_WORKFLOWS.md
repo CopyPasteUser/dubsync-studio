@@ -25,6 +25,12 @@ to choose up to eight other videos. DubSync ranks them by actual frame alignment
 requiring stronger evidence from separate interior episode sections before
 labeling a candidate verified. Shared intros or credits alone do not qualify.
 The result is **inspection-only**: nothing is reassigned, renamed, or exported.
+For a verified candidate, the dialog additionally requires selecting the
+specific row, checking the approval box and pressing **Fassung zuordnen**.
+Only the current project assignment changes, not source files or names. Save
+the `.dubsync` project to retain it. The reassigned edition is excluded from
+automatic batches and requires a fresh independent full-episode visual check
+before a single export; shared intros and credits are insufficient.
 Disconnected NAS files and decoder failures are reported as errors, **not** as
 negative visual matches. On large libraries, review a small candidate set at a
 time; the first pass decodes video and can take several minutes.
@@ -57,6 +63,24 @@ their native matcher with `./build-native.sh`. CI checks wheel contents.
 matcher-only speed comparison. A faster matcher does **not** imply the same
 end-to-end gain: video decoding, NAS reads and FFmpeg export remain separate costs.
 
+The optional Rust library also accelerates bounded candidate/hypothesis scoring,
+drift scoring and long-offset verification, with NumPy fallback if the native
+library is unavailable or incompatible. On synthetic CI fixtures, long-offset
+verification was measured at 13.50×, jittered affine scoring at 10.97× and a
+simple affine case at only 1.04×. These are isolated-stage results, **not**
+real-video export, NAS, or GPU throughput claims.
+
+To compare the full FFmpeg matching pipeline with Rust and NumPy backends,
+including decoding time and exact evidence parity, run:
+
+```bash
+./.venv/bin/python scripts/benchmark_match_pipeline.py --repeat 3 --json
+```
+
+Without source paths, the benchmark uses an isolated synthetic clip with an
+independent intro. Pass `SOURCE MASTER` to benchmark representative files
+read-only. Physical-device and real-library performance acceptance remain open.
+
 ## Measure the best decoder concurrency on your machine
 
 For the same source/master pair, measure serial against two-worker video
@@ -72,3 +96,23 @@ parity. A 15% measured speed improvement with two *effective* workers is needed
 before it suggests two. NAS and low-resource restrictions still apply, and no
 settings are changed. Disk page caches, network traffic and other background
 load can skew a single comparison; repeat it on representative local media.
+
+### CPU decoder thread calibration
+
+```bash
+./run.sh --benchmark-threads "/path/to/episode.mkv" --benchmark-seconds 20 --json
+```
+
+The command reads a representative **local** video and does not change settings
+or export anything. For episodes lasting 15 minutes or longer, it tests separate
+beginning, middle and late windows. It alternates candidates three times,
+requires identical frame fingerprints, at least 15% aggregate speed gain and
+no window over 10% slower. Affinity/cgroup limits cap usable threads, and NAS
+files are excluded to avoid expensive repeated network reads. The results
+describe sampling, not full-export throughput.
+
+In **Settings → Performance → CPU-Decoder automatisch einmessen**, run a
+cancellable local calibration, inspect the measured gain and parity, choose
+**Übernehmen** and then **Speichern**. The accepted custom setting is scoped to
+the CPU model and available CPU budget; changing hardware or presets disables
+it. Default decoder behavior and export safety remain unchanged.
