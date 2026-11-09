@@ -15,6 +15,17 @@ import installer_wizard  # noqa: E402
 
 
 class InstallerWizardTests(unittest.TestCase):
+    def test_release_checker_accepts_concise_readme_banner(self):
+        from scripts.release_check import readme_matches_release
+
+        original = "# DubSync Studio\n\n**Current release:** `3.0.0b1`\n"
+        concise = "# DubSync Studio\n\n**Release:** `3.0.0b1` (beta)\n"
+        self.assertTrue(readme_matches_release(original, "3.0.0b1"))
+        self.assertTrue(readme_matches_release(concise, "3.0.0b1"))
+        self.assertFalse(readme_matches_release(concise, "3.0.0b2"))
+        self.assertFalse(readme_matches_release("# Another project\n**Release:** `3.0.0b1`",
+                                                "3.0.0b1"))
+
     def test_cli_help_and_version_do_not_open_gui(self):
         help_result = subprocess.run(
             [sys.executable, str(WIZARD), "--help"], capture_output=True, text=True, timeout=10

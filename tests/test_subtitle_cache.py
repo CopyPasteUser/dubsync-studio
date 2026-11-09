@@ -120,6 +120,16 @@ class SubtitleCacheTests(unittest.TestCase):
         self.assertEqual(provider.call_count, 2)
         self.assertFalse((self.root / "cache").exists())
 
+    def test_sync_backend_is_part_of_online_cache_identity(self):
+        without = self.cache.key(self.master, 100.0, "deu", "subdl", sync_backend="off")
+        with_sync = self.cache.key(self.master, 100.0, "deu", "subdl",
+                                   sync_backend="ffsubsync-v1")
+        self.assertNotEqual(without, with_sync)
+        self.assertEqual(self.cache.key(self.master, 100.0, "deu", "generate",
+                                        sync_backend="off"),
+                         self.cache.key(self.master, 100.0, "deu", "generate",
+                                        sync_backend="ffsubsync-v1"))
+
     def test_cache_rejects_symlink_and_path_traversal_keys(self):
         external = self.root / "outside.srt"
         external.write_bytes(OTHER)

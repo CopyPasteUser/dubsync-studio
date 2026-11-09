@@ -17,7 +17,7 @@ from pathlib import Path
 from .fingerprint import quick_fingerprint
 
 
-_CACHE_VERSION = 1
+_CACHE_VERSION = 2
 _MAX_FILE_BYTES = 5 * 1024 * 1024
 _MAX_TOTAL_BYTES = 128 * 1024 * 1024
 _MAX_ENTRIES = 256
@@ -47,7 +47,7 @@ class SubtitleCache:
         self.directory = Path(directory) if directory is not None else default_subtitle_cache_dir()
 
     def key(self, master: Path, duration: float, language: str, strategy: str,
-            model: str = "small") -> str | None:
+            model: str = "small", sync_backend: str = "off") -> str | None:
         if not subtitle_cache_enabled() or strategy not in _CACHED_STRATEGIES:
             return None
         try:
@@ -69,6 +69,7 @@ class SubtitleCache:
                 "duration_ms": round(duration * 1000),
                 "language": language,
                 "strategy": strategy,
+                "sync_backend": sync_backend if strategy != "generate" else "off",
                 "model": model if strategy == "generate" else None,
                 "native_model": native_model,
             }

@@ -15,6 +15,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def readme_matches_release(readme: str, version: str) -> bool:
+    """Accept both the original and concise release banner formats."""
+    return (bool(re.search(r"^# DubSync Studio$", readme, re.MULTILINE))
+            and bool(re.search(rf"\*\*(?:Current release|Release):\*\*\s*`{re.escape(version)}`",
+                               readme)))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--require-gui", type=int, default=0)
@@ -36,8 +43,7 @@ def main() -> int:
         match = re.search(pattern, text)
         if not match or match.group(1) != version:
             errors.append(f"Version metadata mismatch: {name} (expected {version})")
-    if (not re.search(r"^# DubSync Studio$", readme, re.MULTILINE)
-            or not re.search(rf"\*\*Current release:\*\*\s*`{re.escape(version)}`", readme)):
+    if not readme_matches_release(readme, version):
         errors.append("README title or current-release field does not match package version")
     expected_status = ("Development Status :: 4 - Beta" if re.search(r"b\d+$", version)
                        else "Development Status :: 5 - Production/Stable")

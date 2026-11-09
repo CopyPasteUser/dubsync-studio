@@ -13,7 +13,8 @@ from unittest.mock import patch
 
 from dubsync.core.models import MediaInfo, StreamInfo
 from dubsync.core.subtitles import (SubtitleError, SubtitleOptions, _subdl_candidates,
-                                   _download, _download_video_captions, _extract_archive,
+                                   _check_timing, _download, _download_video_captions,
+                                   _extract_archive, _try_sync_online,
                                    _find_archive, _read_https, prepare_subtitles)
 
 
@@ -30,6 +31,7 @@ class SubtitleSourceTests(unittest.TestCase):
             "XDG_CACHE_HOME": str(self.root / "xdg-cache"),
             "DUBSYNC_SUBTITLE_CACHE_DIR": str(self.root / "subtitle-cache"),
             "DUBSYNC_SUBTITLE_CACHE": "1",
+            "DUBSYNC_SUBTITLE_AUTO_SYNC": "1",
         })
         environment.start()
         self.addCleanup(environment.stop)
@@ -325,6 +327,106 @@ class SubtitleSourceTests(unittest.TestCase):
             with self.assertRaisesRegex(SubtitleError, "3 Kandidat"):
                 list(_subdl_candidates(self.master, self.root, "deu"))
         self.assertEqual(len(fetched), 3)
+
+    def test_subdl_ignores_release_names_for_the_wrong_episode(self):
+        fetched = []
+        result = {"status": True, "subtitles": [
+            {"release_name": "Show.S01E03.1080p", "url": "/subtitle/wrong.srt",
+             "season": 1, "episode": 2, "format": "srt"},
+            {"release_name": "Show.S01E02.720p", "url": "/subtitle/right.srt",
+             "season": 1, "episode": 2, "format": "srt"},
+        ]}
+
+        def fake_fetch(host, path, **_kwargs):
+            if host == "api.subdl.com":
+                return json.dumps(result).encode()
+            fetched.append(path)
+            return CAPTIONS
+
+        with (patch.dict(os.environ, {"DUBSYNC_SUBDL_API_KEY": "key"}),
+              patch("dubsync.core.subtitles._read_https", side_effect=fake_fetch)):
+            self.assertEqual(next(_subdl_candidates(self.master, self.root, "deu")).read_bytes(),
+                             CAPTIONS)
+        self.assertEqual(fetched, ["/subtitle/right.srt"])
+
+    def test_invalid_subtitle_cue_order_and_duration_are_rejected(self):
+        candidate = self.root / "bad.srt"
+        candidate.write_text("1\n00:00:03,000 --> 00:00:02,000\nBad backwards\n")
+        with self.assertRaisesRegex(SubtitleError, "umgekehrte"):
+            _check_timing(candidate, 100)
+        candidate.write_text("1\n00:00:01,000 --> 00:00:02,000\nFirst\n\n"
+                             "2\n00:00:00,000 --> 00:00:03,000\nUnsorted\n")
+        with self.assertRaisesRegex(SubtitleError, "unsortierte"):
+            _check_timing(candidate, 100)
+        candidate.write_text("1\n00:01:80,000 --> 00:01:81,000\nBad minutes\n")
+        with self.assertRaisesRegex(SubtitleError, "ungültige"):
+            _check_timing(candidate, 100)
+
+    def test_online_quality_rejects_subtitles_covering_only_first_fraction(self):
+        self.info.duration = 3600
+        incomplete = ("".join(f"{i}\n00:00:{i:02d},000 --> 00:00:{i+1:02d},000\nText\n\n"
+                              for i in range(1, 7))).encode()
+        with (patch("dubsync.core.subtitles._subdl_candidates",
+                    return_value=iter([self.master])),
+              patch("dubsync.core.subtitles._convert_to_srt",
+                    side_effect=lambda _f, _src, dst, **_kw: dst.write_bytes(incomplete))):
+            with self.assertRaisesRegex(SubtitleError, "kurzen Teil"):
+                prepare_subtitles(self.master, self.info,
+                                  SubtitleOptions(mode="subdl", language="deu"),
+                                  self.root, "ffmpeg")
+
+    def test_optional_sync_uses_correct_audio_and_never_mutates_master(self):
+        self.info.streams.append(StreamInfo(2, "audio", codec_name="aac", language="deu"))
+        original_master = self.master.read_bytes()
+        source = self.root / "captions.srt"
+        source.write_bytes(CAPTIONS)
+        commands = []
+
+        def fake_run(command, **_kw):
+            commands.append(command)
+            output = Path(command[command.index("-o") + 1])
+            output.write_bytes(b"1\n00:00:04,000 --> 00:00:05,000\nHallo Welt!\n")
+
+        with patch("dubsync.core.subtitles._run", side_effect=fake_run):
+            _try_sync_online(self.master, self.info, source, executable="ffs", language="deu")
+        self.assertEqual(source.read_bytes(), b"1\n00:00:04,000 --> 00:00:05,000\nHallo Welt!\n")
+        self.assertEqual(self.master.read_bytes(), original_master)
+        self.assertEqual(commands[0][commands[0].index("--reference-stream") + 1], "0:a:1")
+        self.assertIn("--skip-sync-on-low-quality", commands[0])
+
+    def test_sync_invalid_result_is_discarded_without_touching_original(self):
+        source = self.root / "captions.srt"
+        source.write_bytes(CAPTIONS)
+
+        def bad_sync(command, **_kw):
+            Path(command[command.index("-o") + 1]).write_bytes(
+                b"1\n00:10:00,000 --> 00:10:01,000\nWrong cut\n")
+
+        with patch("dubsync.core.subtitles._run", side_effect=bad_sync):
+            _try_sync_online(self.master, self.info, source, executable="ffs", language="deu")
+        self.assertEqual(source.read_bytes(), CAPTIONS)
+        self.assertFalse((self.root / "captions.synced.srt").exists())
+
+    def test_sync_can_repair_moderate_end_overshoot_before_final_validation(self):
+        remote = b"1\n00:01:53,000 --> 00:01:58,000\nLate subtitle\n"
+        corrected = b"1\n00:01:34,000 --> 00:01:39,000\nLate subtitle\n"
+
+        def fake_convert(_f, _source, dest, **_kw):
+            dest.write_bytes(remote)
+
+        def fake_sync(command, **_kw):
+            Path(command[command.index("-o") + 1]).write_bytes(corrected)
+
+        with (patch("dubsync.core.subtitles._find_program",
+                    side_effect=lambda name: "ffs" if name == "ffsubsync" else None),
+              patch("dubsync.core.subtitles._subdl_candidates",
+                    return_value=iter([self.master])),
+              patch("dubsync.core.subtitles._convert_to_srt", side_effect=fake_convert),
+              patch("dubsync.core.subtitles._run", side_effect=fake_sync)):
+            result = prepare_subtitles(self.master, self.info,
+                                       SubtitleOptions(mode="subdl", language="deu"),
+                                       self.root, "ffmpeg")
+        self.assertEqual(result.read_bytes(), corrected)
 
     def test_provider_urls_are_restricted(self):
         for path in ("//evil.example/", "/subtitle/../etc/passwd", "/subtitle/foo?key=bad"):

@@ -203,16 +203,106 @@ def _convert_to_srt(ffmpeg: str, source: Path, destination: Path, *,
 
 def _check_timing(path: Path, duration: float) -> None:
     """Reject grossly mismatched editions before attaching their captions."""
-    content = path.read_text(encoding="utf-8-sig", errors="replace")
-    stamps = re.findall(r"(?m)^\d{2}:\d{2}:\d{2},\d{3}\s*-->\s*"
-                        r"(\d{2}):(\d{2}):(\d{2}),(\d{3})", content)
-    if not stamps:
-        raise SubtitleError("Keine Untertitel-Zeitmarken gefunden.")
-    last = max(int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000
-               for h, m, s, ms in stamps)
+    windows = _srt_windows(path)
+    last = max(end for _start, end in windows)
     if last > duration + max(5.0, duration * 0.01):
         raise SubtitleError("Untertitel laufen deutlich länger als der Bildmaster; "
                             "wahrscheinlich eine andere Schnittfassung.")
+
+
+def _srt_windows(path: Path) -> list[tuple[float, float]]:
+    """Parse canonical SRT cue windows and reject impossible or unsorted timings."""
+    if not _usable(path) or path.stat().st_size > _MAX_SUBTITLE_BYTES:
+        raise SubtitleError("Untertiteldatei fehlt oder ist zu groß.")
+    content = path.read_text(encoding="utf-8-sig", errors="replace")
+    marks = re.findall(r"(?m)^(\d{2}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*"
+                       r"(\d{2}):(\d{2}):(\d{2}),(\d{3})", content)
+    if not marks:
+        raise SubtitleError("Keine Untertitel-Zeitmarken gefunden.")
+    windows = []
+    previous_start = -1.0
+
+    def seconds(parts: tuple[str, ...]) -> float:
+        return (int(parts[0]) * 3600 + int(parts[1]) * 60
+                + int(parts[2]) + int(parts[3]) / 1000)
+
+    for cue in marks:
+        start_values, end_values = cue[:4], cue[4:]
+        if any(int(parts[1]) >= 60 or int(parts[2]) >= 60 for parts in
+               (start_values, end_values)):
+            raise SubtitleError("Untertitel enthalten ungültige Minuten oder Sekunden.")
+        start, end = seconds(start_values), seconds(end_values)
+        if end <= start or start < previous_start:
+            raise SubtitleError("Untertitel enthalten umgekehrte oder unsortierte Zeitmarken.")
+        windows.append((start, end))
+        previous_start = start
+    return windows
+
+
+def _check_online_completeness(path: Path, duration: float) -> None:
+    """Do not mistake a short excerpt for a full episode or movie subtitle."""
+    if duration < 15 * 60:
+        return
+    windows = _srt_windows(path)
+    if len(windows) >= 5 and windows[-1][1] < duration * 0.35:
+        raise SubtitleError("Online-Untertitel scheinen nur einen kurzen Teil "
+                            "des Bildmasters abzudecken.")
+
+
+def _subtitle_sync_program() -> str | None:
+    if os.environ.get("DUBSYNC_SUBTITLE_AUTO_SYNC", "1").strip().lower() in {
+            "0", "off", "false", "no"}:
+        return None
+    return _find_program("ffsubsync") or _find_program("ffs")
+
+
+def _try_sync_online(master: Path, info: MediaInfo, path: Path, *, executable: str | None,
+                     language: str, cancel_event=None,
+                     progress: Callable[[str], None] | None = None) -> None:
+    """Conservatively repair remote SRT timing, retaining the original on failure.
+
+    Audio is sampled only from the picture master; providers never see media.
+    The input is never modified until a separate output has passed validation.
+    """
+    if not executable or not info.audio:
+        return
+    if progress is not None:
+        progress("Prüfe Online-Untertitel gegen die Sprache im Bildmaster …")
+    candidate = path.with_name("captions.synced.srt")
+    matching = next((index for index, audio in enumerate(info.audio)
+                     if normalize_language_code(audio.language) == language), 0)
+    command = [executable, str(master), "-i", str(path), "-o", str(candidate),
+               "--reference-stream", f"0:a:{matching}",
+               "--skip-sync-on-low-quality", "--max-offset-seconds", "25",
+               "--quality-max-offset-seconds", "20",
+               "--max-framerate-deviation", "0.03"]
+    if info.duration >= 15 * 60:
+        command += ["--multi-segment-sync", "--segment-count", "6",
+                    "--skip-intro-outro", "--parallel-workers", "2"]
+    try:
+        before = _srt_windows(path)
+        _run(command, timeout=240, cancel_event=cancel_event)
+        after = _srt_windows(candidate)
+        if len(before) != len(after):
+            raise SubtitleError("Automatische Korrektur hat Untertitelzeilen verändert.")
+        _check_timing(candidate, info.duration)
+        # ffsubsync is configured to reject speculative large shifts. Independently
+        # enforce that guard on its output, including mismatched/old CLI versions.
+        if abs(after[0][0] - before[0][0]) > 25:
+            raise SubtitleError("Automatische Korrektur verschiebt zu weit.")
+        os.replace(candidate, path)
+        if progress is not None:
+            progress("Untertitel-Zeitmarken geprüft und gegebenenfalls korrigiert.")
+    except SubtitleError as exc:
+        if "abgebrochen" in str(exc):
+            raise
+        if progress is not None:
+            progress("Zeitkorrektur nicht zuverlässig; behalte Original-Untertitel.")
+    except OSError:
+        if progress is not None:
+            progress("Zeitkorrektur nicht verfügbar; behalte Original-Untertitel.")
+    finally:
+        candidate.unlink(missing_ok=True)
 
 
 def _download(master: Path, directory: Path, language: str, cancel_event=None) -> Path:
@@ -312,6 +402,11 @@ def _subdl_candidates(master: Path, directory: Path, language: str,
             if extension not in (*_FORMATS, "zip"):
                 continue
             release = str(part.get("release_name") or entry.get("release_name") or "")
+            release_episode = _episode_id(release)
+            filename_episode = _episode_id(str(part.get("name") or ""))
+            if episode is not None and any(found is not None and found != episode
+                                           for found in (release_episode, filename_episode)):
+                continue  # Provider metadata can contradict its release filename.
             overlap = len(master_terms & set(re.findall(r"[a-z0-9]{3,}", release.casefold())))
             ranked.append((overlap, len(ranked), {"url": relative, "extension": extension}))
     if not ranked:
@@ -449,6 +544,20 @@ def prepare_subtitles(master: Path, info: MediaInfo, options: SubtitleOptions,
     target = directory / "captions.srt"
     errors = []
     cache = SubtitleCache()
+    sync_program = _subtitle_sync_program()
+
+    def validate_candidate(strategy: str) -> None:
+        online = strategy in {"subdl", "subliminal", "url"}
+        # Allow a moderate end overshoot that sync can safely repair. Reject
+        # gross edition mismatches before audio extraction starts.
+        _check_timing(target, info.duration + (25 if online and sync_program else 0))
+        if online:
+            _try_sync_online(master, info, target, executable=sync_program,
+                             language=language, cancel_event=cancel_event, progress=progress)
+        _check_timing(target, info.duration)
+        if online:
+            _check_online_completeness(target, info.duration)
+
     strategies = (["sidecar", "archive", "embedded", "subdl", "subliminal"]
                   + (["generate"] if options.mode == "auto" else [])
                   if options.mode in {"auto", "existing"} else
@@ -473,7 +582,9 @@ def prepare_subtitles(master: Path, info: MediaInfo, options: SubtitleOptions,
             # Local/embedded sources are deliberately never cached. Remote and
             # generated results are isolated by provider, language and master.
             cache_key = cache.key(master, info.duration, language, strategy,
-                                  options.whisper_model)
+                                  options.whisper_model,
+                                  "ffsubsync-v1" if sync_program and strategy in {
+                                      "subdl", "subliminal"} else "off")
             if cache.load(cache_key, target, duration=info.duration, strategy=strategy):
                 if progress is not None:
                     progress("Wiederverwende geprüfte Untertitel aus privatem Cache …")
@@ -505,18 +616,21 @@ def prepare_subtitles(master: Path, info: MediaInfo, options: SubtitleOptions,
                 _convert_to_srt(ffmpeg, path, target, cancel_event=cancel_event)
             elif strategy == "subdl":
                 rejected = 0
+                last_reason = ""
                 for path in _subdl_candidates(master, directory, language, cancel_event=cancel_event):
                     target.unlink(missing_ok=True)
                     try:
                         _convert_to_srt(ffmpeg, path, target, cancel_event=cancel_event)
-                        _check_timing(target, info.duration)
+                        validate_candidate(strategy)
                         cache.store(cache_key, target)
                         return target
                     except SubtitleError as exc:
                         if "abgebrochen" in str(exc):
                             raise
                         rejected += 1
-                raise SubtitleError(f"SubDL: {rejected} konvertierte Kandidaten unbrauchbar.")
+                        last_reason = str(exc)
+                raise SubtitleError(f"SubDL: {rejected} konvertierte Kandidaten unbrauchbar"
+                                    + (f" (letzter Grund: {last_reason})." if last_reason else "."))
             elif strategy == "url":
                 path = _download_video_captions(options.file_path, directory, language,
                                                 cancel_event=cancel_event)
@@ -525,7 +639,7 @@ def prepare_subtitles(master: Path, info: MediaInfo, options: SubtitleOptions,
                 path = _generate(master, info, directory, language,
                                  options.whisper_model, ffmpeg, cancel_event=cancel_event)
                 _convert_to_srt(ffmpeg, path, target, cancel_event=cancel_event)
-            _check_timing(target, info.duration)
+            validate_candidate(strategy)
             cache.store(cache_key, target)
             return target
         except SubtitleError as exc:
