@@ -64,6 +64,22 @@ Or run it directly without installing a desktop launcher:
 For a headless environment check: `./run.sh --doctor`. See
 [installation details](docs/INSTALL_LINUX.md) for distribution-specific notes.
 
+### Headless library and queue inspection
+
+The same installation can inspect a library or queued jobs without starting Qt:
+
+```bash
+./run.sh --scan-library "/mnt/nas/series/de" --scan-library "/mnt/nas/series/en"
+./run.sh --scan-library "/mnt/nas/series" --json
+./run.sh --queue-status --json
+```
+
+Scanning groups editions by filename and folder metadata only; it never
+decodes, synchronizes or exports media, and grouping is **not** visual proof
+that two files contain the same episode. JSON scan output contains full local
+file paths, so keep it private. Queue status reports counts and recent progress,
+without source paths or stored failure logs; it does not start or resume jobs.
+
 ## Workflow
 
 1. Add folders containing the language editions and **scan** the library.

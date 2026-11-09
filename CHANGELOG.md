@@ -1,3 +1,17 @@
+# Unreleased · Headless workflow and resource safety (2026-11-09)
+
+- Read-only CLI library inspection with repeated `--scan-library` roots and JSON
+  output. Reuses existing episode grouping and excludes generated export folders;
+  filename matches are explicitly not accepted as visual synchronization proof.
+- `--queue-status` gives counts and a bounded recent-job snapshot without media
+  paths, journal paths, or stored error logs. It never starts or resumes jobs.
+- Batch worker selection now checks the *remaining* cgroup v1/v2 memory budget
+  as well as host `MemAvailable`. A memory-limited container can no longer
+  claim the host's free RAM when deciding to run two video decoders.
+- Regression coverage for headless workflows, private queue summaries, and
+  host/container memory limits. No changes to export authorization or matching
+  confidence thresholds.
+
 # 3.0.0b1 · Evidence-first sync review and stronger multi-cut safety (2026-11-02)
 
 - Evidence timeline separates visual samples, unverified time and unmapped

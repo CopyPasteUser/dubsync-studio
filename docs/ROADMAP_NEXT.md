@@ -1,8 +1,28 @@
 # DubSync Studio · Roadmap to 3.0
 
-Updated **2026-11-02**. Milestones below describe capability tracks, **not**
+Updated **2026-11-09**. Milestones below describe capability tracks, **not**
 retroactively published version tags. `3.0.0b1` is a development beta; no
 stable 2.x or 3.x release has been certified.
+
+## Next feature and optimization sprints
+
+Prioritized **2026-11-09**. The following sprints are separate from the physical
+3.0 acceptance gates; an implemented feature is not automatically certified on
+real media, GPUs or NAS mounts.
+
+| Sprint | Priority | Status | Deliverable and acceptance criteria |
+| --- | --- | --- | --- |
+| **1. Headless inspection and RAM safety** | P1 | **Implemented; hardware QA pending** | CLI library scan of multiple roots, JSON grouping without export; queue count/progress overview without media paths; container-aware free-memory scheduling. Unit/integration tests pass; verify on real NAS and cgroup-limited hosts. |
+| **2. Stable 3.0 acceptance** | P0 | **Open** | Wrong-episode / multi-cut real-media corpus, GPU execution + parity measurements, NAS disconnect/reconnect, clean installer/desktop checks. No stable tag until release checklist passes. |
+| **3. Episode match explorer** | P1 | **Planned** | Ranked *visual* candidate evidence for ambiguous season editions, human-approved reassignment only, explicit no-match result, no confidence-gate bypass; baseline false-positive tests. |
+| **4. Continuous A/B audio audition** | P2 | **Planned** | Bounded, synchronized playback/scrubbing with cancel, source selection and no silent export authorization; keyboard access and resource caps. |
+| **5. Adaptive throughput tuning** | P2 | **Partially implemented** | Compare single/two-worker and CPU/GPU timings on local media, record speed, RAM and NAS I/O; adapt only worker/decoder resources, never sample density or export safety. |
+| **6. Independent scene-boundary evidence** | P2 | **Planned** | Confirm complicated cuts using an independent visual signal; fail closed on disagreements, keep reproducible proof diagnostics and a reference corpus. |
+| **7. Optional Rust engine experiment** | P3 | **Conditional** | Profile real episodes first; port only a measured Python-bound hotspot, compare correctness and end-to-end speed against existing NumPy/OpenCV, preserve Python/Qt fallback. |
+
+Suggested order: complete the physical 3.0 acceptance gates, then the candidate
+explorer and audition tools. Optimization work should be driven by recorded
+pipeline timings, not hypothetical language speedups.
 
 | Track | Status | Acceptance / outstanding work |
 | --- | --- | --- |

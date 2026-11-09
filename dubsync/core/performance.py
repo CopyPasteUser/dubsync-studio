@@ -103,6 +103,40 @@ def _memory_bytes() -> int:
     return max(512 * 1024**2, total)
 
 
+def available_memory_gib() -> float | None:
+    """Return the smaller host/cgroup free-memory budget, when measurable.
+
+    Host MemAvailable alone is misleading in a memory-limited container: the
+    host may have plenty of RAM while the job is near its cgroup limit.
+    """
+    available: int | None = None
+    try:
+        for line in Path("/proc/meminfo").read_text(encoding="ascii").splitlines():
+            if line.startswith("MemAvailable:"):
+                available = int(line.split()[1]) * 1024
+                break
+    except (OSError, ValueError, IndexError):
+        pass
+    for limit_path, usage_path in (
+        ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current"),
+        ("/sys/fs/cgroup/memory/memory.limit_in_bytes", "/sys/fs/cgroup/memory/memory.usage_in_bytes"),
+    ):
+        try:
+            raw_limit = Path(limit_path).read_text(encoding="ascii").strip()
+            if raw_limit == "max":
+                continue
+            limit = int(raw_limit)
+            used = int(Path(usage_path).read_text(encoding="ascii").strip())
+            if limit <= 0 or used < 0:
+                continue
+            remaining = max(0, limit - used)
+            available = remaining if available is None else min(available, remaining)
+            break
+        except (OSError, ValueError):
+            continue
+    return None if available is None else available / (1024**3)
+
+
 def _gpu_devices() -> list[str]:
     """Read GPU vendor IDs from DRM sysfs without launching slow external commands."""
     vendors = {"0x8086": "Intel", "0x1002": "AMD", "0x10de": "NVIDIA", "0x10005": "Apple"}
