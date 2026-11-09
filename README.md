@@ -119,8 +119,10 @@ their native matcher with `./build-native.sh`. CI checks wheel contents.
 
 `./.venv/bin/python scripts/benchmark_native.py` runs deterministic 1200-frame
 matching comparisons, with additional affine/offset benchmarks when the new
-native symbols are available. The new stages require Rust/Python parity and
-benchmarks on the target hardware before claiming a speed improvement. A faster matcher does **not** imply the same
+native symbols are available. Synthetic CI showed 10.97× for jittered affine
+scoring (240 frames) and 13.50× for long-offset verification (12 shifts of
+1200 frames); a simple affine case was only 1.04×. Physical hardware and
+real-video benchmarks remain pending. A faster matcher does **not** imply the same
 end-to-end gain: video decoding, NAS reads and FFmpeg export remain separate costs.
 
 ### Measure the best decoder concurrency on your machine

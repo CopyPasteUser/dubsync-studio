@@ -34,6 +34,24 @@ class NativeBridgeCompatibilityTests(unittest.TestCase):
             self.assertIsNone(native_verify_offset([FrameSample(0., 0)],
                                                     [FrameSample(0., 0)], 0., 0.85))
 
+    def test_native_affine_checks_cancellation_between_chunks(self):
+        cancelled = threading.Event()
+
+        class FakeLibrary:
+            calls = 0
+
+            def dubsync_best_affine(self, *_args):
+                self.calls += 1
+                cancelled.set()
+                return 0
+
+        fake = FakeLibrary()
+        with patch("dubsync.core.native_match._library", return_value=fake):
+            result = native_best_affine([(0, 0, 0, 0., 0.)], 1,
+                                        [(1., 0.)] * 300, .85, cancelled)
+        self.assertIsNone(result)
+        self.assertEqual(fake.calls, 1)
+
 
 @unittest.skipUnless(_library() is not None, "Optional Rust library not built")
 class RustMatchingTests(unittest.TestCase):
