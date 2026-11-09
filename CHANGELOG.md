@@ -1,5 +1,11 @@
 # Unreleased · Headless workflow and resource safety (2026-11-09)
 
+- Added a standalone real-FFmpeg synthetic subtitle acceptance harness with
+  JSON timing/stream metrics. It runs exports with/without optional SRT, checks
+  the added track is switchable/non-default, verifies original inputs are
+  untouched, and compares SHA-256 hashes of the copied video bitstream.
+  Explicitly distinguishes synthetic mux correctness from live provider/ASR QA.
+
 - Online subtitle quality pass: optional `ffsubsync>=0.5.1` can align SubDL,
   Subliminal and manually linked video captions to the picture master's audio
   using a bounded, conservative speech-activity comparison. Long references

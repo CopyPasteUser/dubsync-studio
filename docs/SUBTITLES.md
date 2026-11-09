@@ -103,6 +103,19 @@ SubDL episode filenames, invalid/unsorted timecodes and obvious short excerpts
 are rejected before embedding. This does **not** prove every online subtitle
 matches the exact cut; inspect the result in a player before archiving.
 
+## Reproducible export QA
+
+Run `./.venv/bin/python scripts/acceptance_subtitles.py --json` from the
+repository to generate an isolated synthetic episode with two audio tracks and
+existing subtitles. The harness exports both with and without another optional
+SRT track, verifies its language and non-default disposition, hashes the
+**copied video bitstream** across all three MKVs, checks source files were not
+modified and reports measured mux times. It uses private temporary files and
+never accesses the user's NAS or online providers. A passing synthetic test
+does not establish that a live SubDL release, Whisper transcript or ffsubsync
+timing adjustment matches the real episode; those require representative
+media/provider QA before 1.0 release acceptance.
+
 ## Persistent subtitle cache
 
 **Fast repeats / resume:** Successfully validated **online and generated** SRT
