@@ -15,7 +15,7 @@ real media, GPUs or NAS mounts.
 | **1. Headless inspection and RAM safety** | P1 | **Implemented; hardware QA pending** | CLI library scan of multiple roots, JSON grouping without export; queue count/progress overview without media paths; container-aware free-memory scheduling. Unit/integration tests pass; verify on real NAS and cgroup-limited hosts. |
 | **2. Stable 3.0 acceptance** | P0 | **Open** | Wrong-episode / multi-cut real-media corpus, GPU execution + parity measurements, NAS disconnect/reconnect, clean installer/desktop checks. No stable tag until release checklist passes. |
 | **3. Episode match explorer** | P1 | **Read-only explorer implemented; reassignment open** | Up to eight explicit candidates ranked by full visual matching and stricter independent interior episode proof; desktop dialog and JSON CLI, no-match and infrastructure-error distinctions, false-positive regression tests. Any future human-approved reassignment needs a separate identity-safe workflow; no gate bypass. |
-| **4. Continuous A/B audio audition** | P2 | **Planned** | Bounded, synchronized playback/scrubbing with cancel, source selection and no silent export authorization; keyboard access and resource caps. |
+| **4. Continuous A/B audio audition** | P2 | **Bounded A/B transport implemented; long-form stream pending** | 12-second reference-aligned A/B windows with in-app Qt playback/pause/stop/scrub, up to four private cached clips for quick switching, bounded cancellable FFmpeg and external-player fallback. Seamless long-form streaming across multiple windows and physical audio-device QA remain open. |
 | **5. Adaptive throughput tuning** | P2 | **Partially implemented** | Compare single/two-worker and CPU/GPU timings on local media, record speed, RAM and NAS I/O; adapt only worker/decoder resources, never sample density or export safety. |
 | **6. Independent scene-boundary evidence** | P2 | **Planned** | Confirm complicated cuts using an independent visual signal; fail closed on disagreements, keep reproducible proof diagnostics and a reference corpus. |
 | **7. Optional Rust engine experiment** | P3 | **Implemented; physical QA pending** | Monotone DP hot path ported with zero external crates, parity tests and benchmark; Python/Qt and NumPy fallback preserved. Confirm end-to-end speed/packaging on reference hardware before making native mandatory. |
@@ -27,7 +27,7 @@ pipeline timings, not hypothetical language speedups.
 | Track | Status | Acceptance / outstanding work |
 | --- | --- | --- |
 | 2.0 · Reliable foundation | **Implemented; physical QA pending** | Native three-column studio, bounded image previews, cautious resume, atomic export. Test real process crashes, NAS loss and recovery before a stable label. |
-| 2.1 · Deep review | **Implemented in 3.0 beta** | Measured image-evidence map, largest-gap jump navigation, on-demand A/B audio waveform excerpts, unchanged export gates. Next: usable continuous audio scrubbing and playback A/B. |
+| 2.1 · Deep review | **Implemented in 3.0 beta** | Measured image-evidence map, largest-gap jump navigation, on-demand A/B waveforms and in-app 12-second A/B player with seek/stop/pause. Next: long-form seamless listening and physical audio hardware acceptance. Export gates unchanged. |
 | 2.2 · Episode intelligence | **Partly implemented** | Explicit filename-identity checks and two-way independently confirmed swap recovery, plus a read-only candidate scorecard (desktop and CLI). Next: approved identity-safe reassignment workflow and season-level matrix. No unilateral reassignments. |
 | 2.3 · Adaptive engine | **Implemented; benchmark QA pending** | CPU/RAM-aware Light/Balanced/Maximum presets, separate Intel/AMD render-node discovery, verified frame parity and speed gate, UI decoder self-test. Next: repeatable reference-device benchmarks and sustained-load throttling. |
 | 3.0 · Advanced matching | **Beta implementation** | Piecewise 2–5 independently proven monotone segments; disjoint scenes remain silent/skipped. New: exclude cross-segment repeated motifs from proof. Next: disagreement diagnostics from an independent visual signal and stronger mixed-cut/drift reference corpus. |
@@ -54,8 +54,9 @@ pipeline timings, not hypothetical language speedups.
 
 - **Episode match explorer:** compare several candidate editions against the
   same master in a read-only scorecard; require human approval for any reassignment.
-- **Continuous A/B audition:** transport controls and synchronized audio
-  scrubbing using bounded playback windows and explicit input selection.
+- **Long-form A/B audition:** optionally stream successive bounded windows
+  without a manual re-request; keep discontinuous cuts silent and cancellation
+  immediate. Current 12-second A/B window and scrubbing are implemented.
 - **More editing models:** robust outlier/drift visualization with an independent
   check against scene boundaries before proposing extra time-warp segments.
 - **Runtime auto-tuning:** adaptive decoding concurrency based on measured

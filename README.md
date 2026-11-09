@@ -126,6 +126,15 @@ end-to-end gain: video decoding, NAS reads and FFmpeg export remain separate cos
 
 `Alt+1` Studio · `Alt+2` Queue · `Alt+3` Activity · `Ctrl+F` Episode search
 
+For hearing checks, **Hörprobe …** opens a bounded A/B player: choose a
+reference position and switch between **A · Bildmaster** and **B · Sprachfassung**.
+Once both 12-second WAV windows have been generated, switching is immediate;
+pause, stop and scrub within the loaded window using the accessible controls.
+No full-track audio is loaded into memory, and the latest four previews are
+cached only in a private temporary folder that is removed when the app closes.
+Qt audio playback requires a working local sound backend; the existing external
+player remains the fallback. A listening check never enables an unsafe export.
+
 ## Correctness comes first
 
 - Different episodes **must not** pass on matching intros or end cards alone.
