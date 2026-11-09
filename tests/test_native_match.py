@@ -9,8 +9,9 @@ from unittest.mock import patch
 
 from dubsync.core.alignment import (AlignmentError, FrameSample, _offset_probe_candidates,
                                    _feature_candidate_pairs, _sequence_alignment)
-from dubsync.core.native_match import (_library, native_feature_candidates,
-                                       native_offset_candidates, native_pairs)
+from dubsync.core.native_match import (_library, native_best_affine,
+                                       native_feature_candidates, native_offset_candidates,
+                                       native_pairs, native_verify_offset)
 
 
 def scalar_candidates(source, target):
@@ -28,6 +29,10 @@ class NativeBridgeCompatibilityTests(unittest.TestCase):
         with patch("dubsync.core.native_match._library", return_value=object()):
             self.assertIsNone(native_feature_candidates([0], [0]))
             self.assertIsNone(native_offset_candidates([0], [0], [True]))
+            self.assertIsNone(native_best_affine([(0, 0, 0, 0., 0.)], 1,
+                                                 [(1., 0.)], 0.85))
+            self.assertIsNone(native_verify_offset([FrameSample(0., 0)],
+                                                    [FrameSample(0., 0)], 0., 0.85))
 
 
 @unittest.skipUnless(_library() is not None, "Optional Rust library not built")
@@ -123,6 +128,86 @@ class RustOffsetCandidateTests(unittest.TestCase):
         self.assertIsNone(native_offset_candidates([0], [0], [2]))
         self.assertIsNone(native_offset_candidates([0] * 5001, [0], [True]))
         self.assertEqual(native_offset_candidates([], [0], [True]), [])
+
+
+@unittest.skipUnless(_library() is not None and
+                     hasattr(_library(), "dubsync_best_affine"),
+                     "Optional Rust affine scorer not built")
+class RustAffineScoringTests(unittest.TestCase):
+    def test_scores_match_numpy_fallback_for_cuts_and_repeated_motifs(self):
+        from dubsync.core.alignment import _feature_anchor_fallback
+        rng = random.Random(7301)
+        for case in range(18):
+            source_hashes = [rng.getrandbits(62) for _ in range(72)]
+            if case % 3 == 0:
+                source_hashes[::7] = [source_hashes[0]] * len(source_hashes[::7])
+            source = [FrameSample(float(i), h) for i, h in enumerate(source_hashes)]
+            target = [FrameSample(float(i), rng.getrandbits(62)) for i in range(case % 9)]
+            for index, hash_ in enumerate(source_hashes):
+                if case % 5 == 0 and index in (22, 23, 24):
+                    continue
+                target.append(FrameSample(len(target) * (1.0 + (case % 3) * .005), hash_))
+            with self.subTest(case=case):
+                native = _feature_anchor_fallback(source, target, 1.0)
+                with patch("dubsync.core.alignment.native_best_affine", return_value=None):
+                    reference = _feature_anchor_fallback(source, target, 1.0)
+                self.assertEqual(native, reference)
+
+    def test_bad_input_and_empty_hypotheses_are_bounded(self):
+        self.assertIsNone(native_best_affine([(0, 0, 0, float("nan"), 0.)],
+                                             1, [(1., 0.)], .85))
+        self.assertIsNone(native_best_affine([(0, 0, 0, 0., 0.)],
+                                             5001, [(1., 0.)], .85))
+        self.assertEqual(native_best_affine([], 1, [(1., 0.)], .85), [])
+
+    def test_cancellation_between_hypothesis_chunks(self):
+        cancelled = threading.Event()
+        cancelled.set()
+        self.assertIsNone(native_best_affine([(0, 0, 0, 0., 0.)],
+                                             1, [(1., 0.)] * 500, .85, cancelled))
+
+
+@unittest.skipUnless(_library() is not None and
+                     hasattr(_library(), "dubsync_verify_offset"),
+                     "Optional Rust long-offset verifier not built")
+class RustLongOffsetVerificationTests(unittest.TestCase):
+    def test_matches_scalar_window_rules_with_intros_drift_and_duplicates(self):
+        from bisect import bisect_left
+        rng = random.Random(7107)
+        for case in range(70):
+            hashes = [rng.getrandbits(64) for _ in range(90)]
+            if case % 4 == 0:
+                hashes[::5] = [hashes[1]] * len(hashes[::5])
+            source = [FrameSample(i * .75, h) for i, h in enumerate(hashes)]
+            target = [FrameSample(i * .75, rng.getrandbits(64)) for i in range(case % 11)]
+            prefix_len = len(target)
+            target.extend(FrameSample((prefix_len + i) * .75, hash_)
+                          for i, hash_ in enumerate(hashes))
+            shift, tolerance = case % 11 * .75, 0.85
+            native = native_verify_offset(source, target, shift, tolerance)
+            expected = []
+            last_target = -1
+            target_times = [item.time for item in target]
+            for i, item in enumerate(source):
+                predicted = item.time + shift
+                j = bisect_left(target_times, predicted)
+                matches = []
+                for ti in range(max(last_target + 1, j - 2), min(len(target), j + 3)):
+                    phase = abs(target[ti].time - predicted)
+                    distance = (item.phash ^ target[ti].phash).bit_count()
+                    if phase <= tolerance and distance <= 18:
+                        matches.append((distance, phase, ti))
+                if matches:
+                    distance, _, ti = min(matches)
+                    expected.append((i, ti, distance))
+                    last_target = ti
+            with self.subTest(case=case):
+                self.assertEqual(native, expected)
+
+    def test_invalid_inputs_do_not_crash_bridge(self):
+        sample = [FrameSample(0.0, 0)]
+        self.assertIsNone(native_verify_offset([FrameSample(0., -1)], sample, 0., .85))
+        self.assertIsNone(native_verify_offset(sample, sample, float("nan"), .85))
 
 
 if __name__ == "__main__":

@@ -104,7 +104,8 @@ is a review hint, **never** an export or reassignment approval.
 
 ### Optional Rust frame matcher
 
-The video-frame sequence matcher can run in a small Rust library while all
+The video-frame sequence matcher and its bounded fallback candidate/hypothesis
+scoring and long-offset verification can run in a small Rust library while all
 media decoding, synchronization safety checks and the Qt interface remain
 unchanged. With Rust/Cargo installed, `./setup.sh` builds it automatically;
 the manual command is `./build-native.sh`. If it is absent or incompatible,
@@ -116,8 +117,10 @@ Rust `.so`/`.dylib`/`.dll` under the misleading `py3-none-any` tag. Wheel-only
 installations use the safe NumPy backend; source/desktop installations can build
 their native matcher with `./build-native.sh`. CI checks wheel contents.
 
-`./.venv/bin/python scripts/benchmark_native.py` runs a deterministic 1200-frame
-matcher-only speed comparison. A faster matcher does **not** imply the same
+`./.venv/bin/python scripts/benchmark_native.py` runs deterministic 1200-frame
+matching comparisons, with additional affine/offset benchmarks when the new
+native symbols are available. The new stages require Rust/Python parity and
+benchmarks on the target hardware before claiming a speed improvement. A faster matcher does **not** imply the same
 end-to-end gain: video decoding, NAS reads and FFmpeg export remain separate costs.
 
 ### Measure the best decoder concurrency on your machine
