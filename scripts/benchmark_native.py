@@ -113,6 +113,24 @@ def main() -> int:
         if not _measure("affine hypotheses (120 frames)", fallback_reference,
                         lambda: _feature_anchor_fallback(short_source, short_target, .75)):
             return 1
+        # A slight, monotonically increasing timing drift produces thousands of
+        # distinct plausible models. That is where hypothesis scoring can be a
+        # real bottleneck; an exact-offset example above tests its FFI floor.
+        drift_hashes = hashes[:240]
+        drift_source = [FrameSample(i * .75, h) for i, h in enumerate(drift_hashes)]
+        drift_intro = [FrameSample(i * .75, rng.getrandbits(64)) for i in range(17)]
+        drift_target = drift_intro + [
+            FrameSample(12.75 + i * .75 * 1.012 + rng.uniform(-.08, .08), h)
+            for i, h in enumerate(drift_hashes)
+        ]
+
+        def drift_reference():
+            with patch("dubsync.core.alignment.native_best_affine", return_value=None):
+                return _feature_anchor_fallback(drift_source, drift_target, .75)
+
+        if not _measure("affine drift hypotheses (240 frames)", drift_reference,
+                        lambda: _feature_anchor_fallback(drift_source, drift_target, .75)):
+            return 1
     if hasattr(lib, "dubsync_verify_offset"):
         offsets = [offset * .75 for offset in (10, 15, 25, 30, 40, 45, 50, 55, 60, 65, 70, 75)]
         verifier = prepare_native_offset_verifier(source, target)
