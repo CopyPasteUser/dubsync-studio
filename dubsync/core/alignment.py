@@ -431,7 +431,9 @@ def _sample_with_cache(path: str, duration: float, interval: float,
         # persisted under a decoder key that normally represents FFmpeg.
         backend = (diagnostic.payload["stages"].get(f"sample_{stage}", {}).get("backend")
                    if diagnostic is not None else None)
-        stored = (after is not None and backend != "opencv" and
+        # Explicit "none" always uses OpenCV; its fingerprints remain valid
+        # across runs and should retain their normal cache hits.
+        stored = (after is not None and (backend != "opencv" or hardware_accel == "none") and
                   cache.put(identity, duration, interval, [(x.time, x.phash) for x in samples],
                             cache_mode))
         if diagnostic is not None:

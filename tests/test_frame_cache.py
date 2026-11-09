@@ -117,6 +117,21 @@ class FrameCacheTests(unittest.TestCase):
         self.assertIsNone(cache.get(source_identity(str(self.file)), 12, 1., "auto-ffmpeg-v2"))
         self.assertFalse(diagnostic.payload["stages"]["sample_cache_source"]["stored"])
 
+    def test_explicit_opencv_mode_keeps_its_cache(self):
+        cache = FrameSampleCache(self.db)
+        generated = [FrameSample(stamp, value) for stamp, value in self.samples]
+        diagnostic = AlignmentDiagnostic(str(self.file), str(self.file), 1., 100, "none")
+
+        def opencv(*args, **_kwargs):
+            args[7].stage("sample_source", status="completed", backend="opencv")
+            return generated
+
+        with mock.patch("dubsync.core.alignment.sample_video", side_effect=opencv):
+            self.assertEqual(_sample_with_cache(str(self.file), 12, 1., None, "Quellvideo",
+                                                 None, "none", diagnostic, cache), generated)
+        self.assertEqual(cache.get(source_identity(str(self.file)), 12, 1., "none"),
+                         self.samples)
+
     def test_cancellation_stops_cached_read(self):
         identity = source_identity(str(self.file))
         cache = FrameSampleCache(self.db)
