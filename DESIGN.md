@@ -59,8 +59,9 @@ three-pane splitter. Each owns its scroll. The center monitor has "Zeitachse",
 "Framevergleich" and "Audio-A/B" tabs so evidence, images and short waveforms remain usable in a
 compact viewport. At heights below 950px the redundant Studio heading and
 brand subtitle hide.
-Minimum desktop viewport 980×680. Export owns a QScrollArea, allowing all options
-to remain reachable in small windows. Long table columns scroll horizontally.
+Minimum desktop viewport 980×680. Studio and Export own QScrollAreas,
+while the progress/job dock remains fixed; at 1440×900 Studio does not need
+outer scrolling. Long table columns scroll horizontally.
 
 ## Elevation & Depth
 Flat tonal layers and 1px borders; no blur, shadows, gradients or GPU compositing.
@@ -74,7 +75,9 @@ Native dialogs retain platform focus behavior.
 ### Foundational visual states
 Explicit hover, pressed, focus, disabled and selected rules. Disabled primary
 buttons lose their accent. Busy state uses real progress and existing worker
-signals. Empty library and no-results states explain the next action. Empty
+signals. Empty source, unscanned-library and no-results states each offer one
+native next-action button; explanations remain in tooltips and accessibility
+descriptions. Empty
 batch queues use one compact explanatory row and a navigable setup action so
 output configuration remains visible; populated job lists scroll internally.
 

@@ -47,9 +47,13 @@ real GPU usage, smooth audio on physical devices or reliable NAS recovery.
 - Tests: empty/populated/error transitions; keyboard-capable native button;
   narrow scroll and 1440×900 visibility checks.
 
-### Phase 2 · Episode-first Studio
+### Phase 2 · Episode-first Studio — onboarding states implemented; remaining work open
 
-- Make the initial source/scan onboarding one concise, actionable state.
+- Distinguish no sources, sources ready to scan, and active filters without
+  results; expose one explicit next action in the episode list. This is
+  implemented and covered by native Qt state-transition tests.
+- The 980×680 Studio work surface scrolls independently of the persistent job
+  dock, while 1440×900 remains unscrolled; a compact first action stays visible.
 - Keep selection, evidence cursor, track configuration, and unsaved project
   state when navigating between pages. Do not add automatic background work.
 - Improve the 980×680 three-pane hierarchy and splitters, including long

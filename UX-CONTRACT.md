@@ -24,6 +24,7 @@ No billing, authentication or cloud CRUD is present.
 | CPU decoder autotuning | gui/autotune.py / PerformanceSettingsDialog | core/autotune.py + core/performance.py host-bound opt-in | local single-file QThread benchmark, exact parity gate, explicit accept then settings save; NAS excluded | tests/test_autotune.py; tests/test_gui_smoke.py; tests/test_parallel_sampling.py |
 | Durable batch queue | BatchQueueDialog / QTableWidget | core/job_queue.py SQLite entries; core/batch_diagnostics.py proof | explicit start/restart/retry/drain; no implicit startup | tests/test_job_queue.py; tests/test_gui_smoke.py |
 | Inline queue room | QueueControlRoom / QTableWidget | same BatchJobQueue SQLite `recent()`; original start/retry/drain callbacks | compact empty state with Studio navigation; bounded populated list; load failures remain visible; original dialog retained | tests/test_workbench_2.py; tests/test_studio_workspace.py |
+| Episode onboarding | MainWindow.library_empty_action / Studio viewport | existing source list and episode filter; scan remains explicit | no sources → choose folder; sources with no results yet → scan; filter miss → reset. 980×680 Studio scrolls above fixed job dock; 1440×900 avoids outer scroll | tests/test_studio_workspace.py |
 | Visual review | StudioReviewPanel / AlignmentTimeline | live selected AlignmentResult and MediaInfo | anchor/segment plot; user-chosen source; explicit two-still loading | tests/test_workbench_2.py; real NAS pending |
 | Visual evidence | AlignmentTimeline / core/evidence.py | observed anchors plus immutable alignment mapping | sampled / unverified / unmapped; largest-gap navigation; no export mutation | tests/test_evidence.py |
 | Audio A/B | StudioReviewPanel / gui/audio_review.py | explicit 18 s FFmpeg excerpts | two independent waveforms; unmatched source remains empty | tests/test_audio_review.py |
@@ -65,6 +66,10 @@ No billing, authentication or cloud CRUD is present.
   disabled job actions. Queue read failures remain visible. Detected
   multilingual episode groups are labelled separately from persisted jobs;
   neither label establishes permission to export.
+- Studio empty states: adding a source never triggers analysis by itself;
+  scanning requires an explicit press. A filter miss cannot delete results;
+  its reset button only clears search/filter. The episode work area can scroll
+  on short viewports without moving the persistent processing dock.
 - Analyse/export: existing QThread → progress dock → existing completion/error reports.
   Duplicate tasks and profile changes are disabled during processing. Pause remains
   cooperative and cancel releases pause. No new domain transitions introduced.

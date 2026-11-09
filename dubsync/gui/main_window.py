@@ -1912,8 +1912,8 @@ class MainWindow(QMainWindow):
         self.detail_layout.setContentsMargins(2, 2, 2, 2)
         self.detail_layout.setSpacing(10)
         self.detail_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
-        self.detail_empty = QLabel("Dein Schnittplatz ist bereit.\n\nFüge die Ordner deiner Sprachfassungen hinzu\nund starte den Bibliotheksscan.\n\nHier prüfst du anschließend Bildmaster, Tonspuren\nund den ermittelten Zeitversatz.")
-        self.detail_empty.setObjectName("emptyState")
+        self.detail_empty = QLabel("Wähle eine Episode aus. Hier bearbeitest du Bildmaster, Tonspuren und Zeitversatz.")
+        self.detail_empty.setObjectName("mutedText")
         self.detail_empty.setWordWrap(True)
         self.detail_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.detail_layout.addStretch(1)
@@ -2056,13 +2056,23 @@ class MainWindow(QMainWindow):
         splitter.widget(0).setMinimumWidth(232)
         splitter.widget(1).setMinimumWidth(300)
 
-        self.library_empty = QLabel("Noch keine Episoden\nFüge Quellen hinzu und wähle Bibliothek scannen.")
-        self.library_empty.setObjectName("emptyState")
+        self.library_empty = QLabel("Keine Quellen")
+        self.library_empty.setObjectName("mutedText")
         self.library_empty.setWordWrap(True)
         self.library_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.library_empty_panel = QWidget()
+        empty_layout = QVBoxLayout(self.library_empty_panel)
+        empty_layout.setContentsMargins(4, 2, 4, 2)
+        empty_layout.setSpacing(4)
+        empty_layout.addWidget(self.library_empty)
+        self.library_empty_action = QPushButton("Medienordner auswählen")
+        self.library_empty_action.setObjectName("primaryButton")
+        self.library_empty_action.clicked.connect(self._run_library_empty_action)
+        empty_layout.addWidget(self.library_empty_action, 0, Qt.AlignmentFlag.AlignHCenter)
+        empty_layout.addStretch(1)
         self.episode_surface = QStackedWidget()
         left_layout.removeWidget(self.episode_table)
-        self.episode_surface.addWidget(self.library_empty)
+        self.episode_surface.addWidget(self.library_empty_panel)
         self.episode_surface.addWidget(self.episode_table)
         left_layout.addWidget(self.episode_surface, 1)
 
@@ -2107,7 +2117,16 @@ class MainWindow(QMainWindow):
         self.export_button.parentWidget().layout().addWidget(self.to_export_button)
         lib.addLayout(continue_row)
         self.episode_surface.setMinimumHeight(110)
-        self._page_stack.addWidget(library)
+        # A laptop-height viewport cannot accommodate the three-pane editor,
+        # source controls and export actions at once. Keep the job dock fixed
+        # while allowing the Studio work surface itself to scroll.
+        library.setMinimumHeight(590)
+        studio_scroll = QScrollArea()
+        studio_scroll.setObjectName("studioViewport")
+        studio_scroll.setWidgetResizable(True)
+        studio_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        studio_scroll.setWidget(library)
+        self._page_stack.addWidget(studio_scroll)
 
         # Page 2: batch setup and persistent control room.
         export_page = QWidget()
@@ -2870,15 +2889,49 @@ class MainWindow(QMainWindow):
                 visible += 1
         if hasattr(self, "episode_surface"):
             self.episode_surface.setCurrentIndex(1 if visible else 0)
-            self.library_empty.setText(
-                "Keine passenden Episoden\nSuchbegriff löschen oder Filter auf Alle setzen."
-                if self.groups else "Noch keine Episoden\nFüge Quellen hinzu und wähle Bibliothek scannen."
-            )
+            self._update_library_empty_state()
         if self.groups:
             self.episode_count.setText(
                 f"{visible}/{len(self.groups)} Episoden angezeigt · "
                 f"{sum(g.count for g in self.groups)} Dateien gescannt"
             )
+
+    def _update_library_empty_state(self):
+        """Represent source setup, unscanned sources and filter misses distinctly."""
+        if not hasattr(self, "library_empty_action"):
+            return
+        if self.groups:
+            text = "Keine passenden Episoden"
+            action = "Filter zurücksetzen"
+            hint = "Suchbegriff löschen oder Filter auf Alle setzen."
+        elif self.roots:
+            text = "Quellen ausgewählt"
+            action = "Bibliothek scannen"
+            hint = "Die Episodenliste wird erst nach einem ausdrücklich gestarteten Scan aufgebaut."
+        else:
+            text = "Noch keine Medienquellen"
+            action = "Medienordner auswählen"
+            hint = "Füge einen Ordner hinzu oder nutze NAS / Netzwerk in der Quellenleiste."
+        self.library_empty.setText(text)
+        self.library_empty.setToolTip(hint)
+        self.library_empty.setAccessibleDescription(hint)
+        self.library_empty_action.setText(action)
+        self.library_empty_action.setAccessibleName(action)
+        self.library_empty_action.setEnabled(self.worker is None)
+
+    def _run_library_empty_action(self):
+        """Offer an explicit next step without scanning or editing implicitly."""
+        if self.worker is not None:
+            return
+        if self.groups:
+            self.episode_filter_timer.stop()
+            self.episode_search.clear()
+            self.episode_filter.setCurrentIndex(0)
+            self._filter_episodes()
+        elif self.roots:
+            self.scan_library()
+        else:
+            self.add_folder()
 
     def _section_title(self, title: str, subtitle: str):
         box = QWidget()
@@ -2930,6 +2983,7 @@ class MainWindow(QMainWindow):
             item.setData(Qt.ItemDataRole.UserRole, resolved)
             self.root_list.addItem(item)
         self._refresh_workflow_summary()
+        self._update_library_empty_state()
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -5319,6 +5373,8 @@ class MainWindow(QMainWindow):
         self.episode_table.setEnabled(enabled)
         self.episode_search.setEnabled(enabled)
         self.episode_filter.setEnabled(enabled)
+        if hasattr(self, "library_empty_action"):
+            self.library_empty_action.setEnabled(enabled)
         self.detail_scroll.setEnabled(enabled)
         if hasattr(self, "profile_quick_combo"):
             self.profile_quick_combo.setEnabled(enabled)
