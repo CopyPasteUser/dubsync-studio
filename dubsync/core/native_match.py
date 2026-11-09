@@ -97,8 +97,6 @@ def native_feature_candidates(source_hashes: list[int], target_hashes: list[int]
         return None
     return [(int(output[3 * i]), int(output[3 * i + 1]), int(output[3 * i + 2]))
             for i in range(count)]
-
-
 def native_offset_candidates(source_hashes: list[int], target_hashes: list[int],
                              allowed_targets: list[bool]
                              ) -> list[tuple[int, int, int]] | None:

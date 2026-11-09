@@ -6,6 +6,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
+
 from dubsync.core.alignment import (AlignmentError, FrameSample, _offset_probe_candidates,
                                    _feature_candidate_pairs, _sequence_alignment)
 from dubsync.core.native_match import (_library, native_feature_candidates,

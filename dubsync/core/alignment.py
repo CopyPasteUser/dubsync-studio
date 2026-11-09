@@ -25,7 +25,8 @@ from .ffmpeg_sampling import (SamplingBackendError, ffmpeg_sample,
                               choose_verified_decoder)
 from .frame_cache import FrameSampleCache, source_identity
 from .network import is_network_path
-from .native_match import native_feature_candidates, native_offset_candidates, native_pairs
+from .native_match import (native_feature_candidates, native_offset_candidates,
+                           native_pairs)
 from .performance import sampling_worker_policy, system_specs
 
 Progress = Callable[[str, int, int], None]
@@ -85,15 +86,18 @@ def perceptual_hash(frame: np.ndarray) -> int:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     else:
         gray = frame
-    tiny = cv2.resize(gray, (32, 32), interpolation=cv2.INTER_AREA)
+    # FFmpeg already emits 32x32 grayscale frames. Avoid an extra resize on
+    # that hot path; OpenCV capture still receives the original area reduction.
+    tiny = gray if gray.shape == (32, 32) else cv2.resize(
+        gray, (32, 32), interpolation=cv2.INTER_AREA)
     coeff = cv2.dct(np.float32(tiny))[:8, :8].flatten()
     values = coeff[1:]  # ignore DC brightness
-    median = float(np.median(values))
-    result = 0
-    for bit, value in enumerate(values):
-        if value >= median:
-            result |= 1 << bit
-    return result
+    # Exactly 63 elements: index 31 is the median. partition computes only the
+    # order statistic instead of sorting, and packbits replaces 63 Python bit
+    # operations. Keep bitorder=little for binary compatibility with old caches.
+    median = np.partition(values, 31)[31]
+    return int.from_bytes(np.packbits(values >= median, bitorder="little").tobytes(),
+                          "little")
 
 
 def _open_capture(path: str, hardware_accel: str, progress: Progress | None, side: str):
