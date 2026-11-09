@@ -115,6 +115,22 @@ The Rust build has no third-party crates or network runtime requirement.
 matcher-only speed comparison. A faster matcher does **not** imply the same
 end-to-end gain: video decoding, NAS reads and FFmpeg export remain separate costs.
 
+### Measure the best decoder concurrency on your machine
+
+For the same source/master pair, measure serial against two-worker video
+sampling before changing the performance preset:
+
+```bash
+./run.sh --benchmark-workers "/mnt/media/dub.mkv" "/mnt/media/master.mkv" --json
+```
+
+This **runs the full visual analysis twice** without exporting; it records the
+actual decoder worker count, measured sampling time, and exact anchor/safety
+parity. A 15% measured speed improvement with two *effective* workers is needed
+before it suggests two. NAS and low-resource restrictions still apply, and no
+settings are changed. Disk page caches, network traffic and other background
+load can skew a single comparison; repeat it on representative local media.
+
 ## Workflow
 
 1. Add folders containing the language editions and **scan** the library.
