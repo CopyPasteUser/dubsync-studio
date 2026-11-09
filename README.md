@@ -125,6 +125,16 @@ scoring (240 frames) and 13.50× for long-offset verification (12 shifts of
 real-video benchmarks remain pending. A faster matcher does **not** imply the same
 end-to-end gain: video decoding, NAS reads and FFmpeg export remain separate costs.
 
+`./.venv/bin/python scripts/benchmark_match_pipeline.py --repeat 3 --json`
+compares the **whole FFmpeg alignment** with native matching enabled versus the
+Python fallback, using a temporary 60-second clip with an independent 32-second
+intro (primarily exercising Rust long-offset probes/verification). The comparison
+alternates backends, checks complete alignment evidence before reporting speed,
+and separates decoding from matching time. Other native stages are measured by
+`benchmark_native.py`.
+Pass `SOURCE MASTER` to benchmark your own videos read-only. Results on short
+synthetic clips or GitHub runners are not GPU/NAS throughput guarantees.
+
 ### Measure the best decoder concurrency on your machine
 
 For the same source/master pair, measure serial against two-worker video
