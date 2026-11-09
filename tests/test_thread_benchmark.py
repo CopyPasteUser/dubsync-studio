@@ -55,6 +55,15 @@ class CPUThreadBenchmarkTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             compare_cpu_decode_threads("movie.mkv", 2., seconds=3., interval=1.)
 
+    def test_thread_candidates_respect_container_cpu_budget(self):
+        samples = [(float(i), i) for i in range(8)]
+        with (patch("dubsync.core.thread_benchmark.system_specs",
+                    return_value={"logical_cpus": 2}),
+              patch("dubsync.core.thread_benchmark.ffmpeg_sample", return_value=samples)):
+            report = compare_cpu_decode_threads("movie.mkv", 30., seconds=8.,
+                                                interval=1., repetitions=1)
+        self.assertEqual([run["threads"] for run in report["runs"]], [None, 1, 2])
+
     def test_cli_json_shows_measurements_without_media_path_or_settings_change(self):
         with tempfile.TemporaryDirectory() as tmp:
             file = Path(tmp) / "test.mkv"

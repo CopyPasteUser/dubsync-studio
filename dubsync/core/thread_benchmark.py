@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import math
-import os
 import statistics
 import time
 
 from .alignment import perceptual_hash
 from .ffmpeg_sampling import SamplingBackendError, ffmpeg_sample
+from .performance import system_specs
 
 
 def compare_cpu_decode_threads(path: str, duration: float, *, seconds: float = 12.,
@@ -26,7 +26,10 @@ def compare_cpu_decode_threads(path: str, duration: float, *, seconds: float = 1
         raise ValueError("Ungültige Laufzeit, Testlänge oder Wiederholungszahl")
     if min(seconds, duration) < 4 * interval:
         raise ValueError("Video oder Testausschnitt ist für vier Bildproben zu kurz")
-    logical = max(1, min(64, int(logical_cpus or os.cpu_count() or 1)))
+    # Respect CPU affinity and container cgroup quota, not the host's
+    # potentially much larger os.cpu_count() value.
+    budget = logical_cpus if logical_cpus is not None else system_specs()["logical_cpus"]
+    logical = max(1, min(64, int(budget)))
     candidates = sorted({count for count in (1, 2, 4, 8, 12, logical)
                          if count <= logical})
     options: list[int | None] = [None, *candidates]
