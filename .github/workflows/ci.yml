@@ -31,10 +31,11 @@ jobs:
           cargo test --locked --manifest-path native/Cargo.toml
       - name: Verify Rust matching parity and measure all three matcher hot paths
         run: python scripts/benchmark_native.py
-      - name: Measure pHash and reproducible end-to-end FFmpeg alignment
+      - name: Measure pHash and full FFmpeg matching with/without Rust
         run: |
           python scripts/benchmark_phash.py --json
           python scripts/benchmark_pipeline.py --duration 45 --repeat 2 --json
+          python scripts/benchmark_match_pipeline.py --duration 60 --repeat 2 --json
       - name: Verify portable wheel does not bundle Linux-only Rust artifacts
         run: |
           python -m pip wheel --no-deps -w "$RUNNER_TEMP/dubsync-wheels" .
