@@ -825,7 +825,9 @@ class SyncPreviewDialog(QDialog):
         prefetched = self._pending_prefetch
         self._pending_prefetch = False
         self._cache[key] = path
-        self._cache_duration[key] = actual_duration if actual_duration is not None else key[2]
+        planned = plan_audition_window(self.tracks[key[0]], key[1], key[2])
+        self._cache_duration[key] = (actual_duration if actual_duration is not None
+                                     else planned[1] if planned is not None else key[2])
         self._cache.move_to_end(key)
         while len(self._cache) > 4:
             stale_key, stale = self._cache.popitem(last=False)
@@ -4511,7 +4513,7 @@ class MainWindow(QMainWindow):
                     except OSError:
                         pass
             report("Hörprobe bereit", 1, 1)
-            return {"path": str(output), "duration": duration}
+            return str(output)
 
         self._set_preview_dialog_busy(True, "Hörprobe wird erzeugt …")
         self._run_task("Erzeuge synchronisierte Hörprobe …", extract, self._preview_clip_ready)
@@ -4536,9 +4538,7 @@ class MainWindow(QMainWindow):
             # The dialog may have been closed while a short extraction was running.
             self._preview_dialog = None
 
-    def _preview_clip_ready(self, result: str | dict[str, Any]):
-        path = result["path"] if isinstance(result, dict) else result
-        actual_duration = result.get("duration") if isinstance(result, dict) else None
+    def _preview_clip_ready(self, path: str):
         dialog = self._preview_dialog
         self._set_preview_dialog_busy(False, "Hörprobe bereit. Du kannst einen anderen Zeitpunkt wählen und erneut vergleichen.")
         if dialog is not None:
@@ -4546,7 +4546,7 @@ class MainWindow(QMainWindow):
                 if not dialog.isVisible():
                     self.statusBar().showMessage("Hörprobe wurde erstellt; der Dialog ist bereits geschlossen.", 4500)
                     return
-                if dialog.preview_ready(path, actual_duration):
+                if dialog.preview_ready(path):
                     self.statusBar().showMessage("A/B-Hörprobe bereit oder nächster Abschnitt vorgeladen.", 4500)
                     return
             except RuntimeError:
