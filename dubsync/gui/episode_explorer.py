@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QDialogButtonBox, QHeaderView, QLabel, QTableWidget,
+    QCheckBox, QDialog, QDialogButtonBox, QHeaderView, QLabel, QTableWidget,
     QTableWidgetItem, QVBoxLayout,
 )
 
@@ -23,10 +23,12 @@ _VERDICT = {
 
 
 class EpisodeExplorerDialog(QDialog):
-    """Displays evidence only. No actions to mutate identity or export state."""
+    """Shows evidence and optionally collects one explicit, non-export approval."""
 
-    def __init__(self, report: dict, parent=None):
+    def __init__(self, report: dict, parent=None, *, allow_assignment: bool = False):
         super().__init__(parent)
+        self.report = report
+        self.selected_candidate: int | None = None
         self.setWindowTitle("Kandidatenprüfung · DubSync Studio")
         self.resize(870, 405)
         self.setMinimumWidth(620)
@@ -75,6 +77,11 @@ class EpisodeExplorerDialog(QDialog):
                 self.results.setItem(row, column, cell)
         layout.addWidget(self.results, 1)
         safety = QLabel(
+            "Die Bildprüfung ist keine Exportfreigabe. Eine bestätigte Fassung wird nur im aktuellen "
+            "Projekt zugeordnet; Dateien werden nicht umbenannt oder verändert. "
+            "Vor einem Einzelexport sind neue Bildanalyse und Sicherheitsprüfung erforderlich. "
+            "Serienstapel überspringen manuell zugeordnete Gruppen."
+            if allow_assignment else
             "Nur zur Sichtprüfung: Es werden keine Dateinamen, Episodengruppen oder Spuren geändert. "
             "Die Exportfreigabe benötigt weiterhin eine separate vollständige Bildanalyse "
             "und alle bestehenden Sicherheitsprüfungen."
@@ -82,7 +89,44 @@ class EpisodeExplorerDialog(QDialog):
         safety.setObjectName("mutedText")
         safety.setWordWrap(True)
         layout.addWidget(safety)
+        self.approval_checkbox = None
+        self.assign_button = None
+        if allow_assignment:
+            self.approval_checkbox = QCheckBox(
+                "Ich habe die ausgewählte Zeile geprüft und möchte diese Fassung der Episode zuordnen."
+            )
+            self.approval_checkbox.setAccessibleName("Manuelle Fassungszuordnung bestätigen")
+            layout.addWidget(self.approval_checkbox)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.button(QDialogButtonBox.StandardButton.Close).setText("Schließen")
+        if allow_assignment:
+            self.assign_button = buttons.addButton("Fassung zuordnen", QDialogButtonBox.ButtonRole.AcceptRole)
+            self.assign_button.setObjectName("primaryButton")
+            self.assign_button.setEnabled(False)
+            self.assign_button.clicked.connect(self._approve_assignment)
+            self.results.itemSelectionChanged.connect(self._update_assignment_state)
+            self.approval_checkbox.toggled.connect(self._update_assignment_state)
+            self._update_assignment_state()
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _update_assignment_state(self):
+        if self.assign_button is None or self.approval_checkbox is None:
+            return
+        row = self.results.currentRow()
+        selected = self.results.selectionModel().isRowSelected(row, self.results.rootIndex()) if row >= 0 else False
+        item = self.report["candidates"][row] if selected and row < len(self.report["candidates"]) else None
+        proof = item.get("visual_proof") if item else None
+        verified = (item is not None and item.get("status") == "verified"
+                    and isinstance(proof, dict) and proof.get("independent_episode_proof") is True
+                    and proof.get("safe_for_automatic_export") is True)
+        self.assign_button.setEnabled(bool(verified and self.approval_checkbox.isChecked()))
+
+    def _approve_assignment(self):
+        if self.assign_button is None or not self.assign_button.isEnabled():
+            return
+        row = self.results.currentRow()
+        if not 0 <= row < len(self.report["candidates"]):
+            return
+        self.selected_candidate = self.report["candidates"][row]["candidate"]
+        self.accept()

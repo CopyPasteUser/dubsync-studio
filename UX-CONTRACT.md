@@ -27,6 +27,9 @@ No billing, authentication or cloud CRUD is present.
 | Visual review | StudioReviewPanel / AlignmentTimeline | live selected AlignmentResult and MediaInfo | anchor/segment plot; user-chosen source; explicit two-still loading | tests/test_workbench_2.py; real NAS pending |
 | Visual evidence | AlignmentTimeline / core/evidence.py | observed anchors plus immutable alignment mapping | sampled / unverified / unmapped; largest-gap navigation; no export mutation | tests/test_evidence.py |
 | Audio A/B | StudioReviewPanel / gui/audio_review.py | explicit 18 s FFmpeg excerpts | two independent waveforms; unmatched source remains empty | tests/test_audio_review.py |
+| Human-approved edition assignment | EpisodeExplorerDialog / MainWindow, core/episode_assignment.py | freshly evaluated independent interior visual evidence, project-local manual_candidate_assignments | explicit verified-row selection + checkbox; never batch; single export checks new independent alignment | tests/test_episode_assignment.py; tests/test_episode_explorer_gui.py |
+| Longer A/B playback | SyncPreviewDialog / AudioPreviewTransport | bounded private FFmpeg WAV excerpts | user-selected 12/30/60 s, clipped to source/segment; four LRU previews; no auto-next | tests/test_audio_ab_transport.py |
+| Single export preflight | ExportPreflightDialog / core/export_preflight.py | current selected master, tracks, destination, visual evidence | native table with ready/caution/blocked; blocked disables action; exporter remains final authority | tests/test_export_preflight_gui.py |
 | GPU self-test | gui/decoder_test.py / core/ffmpeg_sampling.py | measured CPU/GPU frame parity and throughput | explicit local file, read-only worker, cancel | tests/test_decoder_test.py |
 
 ## Flow ledger
@@ -53,6 +56,15 @@ No billing, authentication or cloud CRUD is present.
   Duplicate tasks and profile changes are disabled during processing. Pause remains
   cooperative and cancel releases pause. No new domain transitions introduced.
 - Unsafe/cancelled/error: explicit insight and full reports, not green success.
+- Candidate adoption: a ranked visual match has no side effects by itself.
+  An explicit checked approval maps the exact verified file to a project group,
+  moving any old scanner ownership while retaining the empty former group.
+  No source is renamed, automatic season processing excludes adopted groups,
+  and a fresh independent interior video proof is mandatory at single export;
+  manual timing corrections cannot bypass this requirement.
+- Export preflight: the selected-file export shows an accessible reasons table
+  after the output filename and overwrite decision. Blocked rows disable Start;
+  the exporter still performs full media verification and atomic finalization.
 - Video-fingerprint cache: explicit on/off in performance settings. Hits show
   file-validated sample reuse; alignment decisions and export safety are always
   recomputed. Cache failures fall back to decoding.

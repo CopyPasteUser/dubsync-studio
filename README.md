@@ -96,7 +96,12 @@ In the Studio inspector, select a picture master and click **Kandidaten …**
 to choose up to eight other videos. DubSync ranks them by actual frame alignment,
 requiring stronger evidence from separate interior episode sections before
 labeling a candidate verified. Shared intros or credits alone do not qualify.
-The result is **inspection-only**: nothing is reassigned, renamed, or exported.
+The report is **inspection-only** until the user selects a verified candidate,
+checks the explicit approval box and presses **Fassung zuordnen**. This changes
+only the open project assignment; source files and filenames are untouched.
+The newly assigned edition must pass a **fresh, independent full-episode visual
+check** for a single export, and manually assigned groups are excluded from
+the automatic season batch. Save the `.dubsync` project to retain the choice.
 Disconnected NAS files and decoder failures are reported as errors, **not** as
 negative visual matches. On large libraries, review a small candidate set at a
 time; the first pass decodes video and can take several minutes.
@@ -109,7 +114,8 @@ The same report is available without Qt:
 
 Candidate indexes in the report refer to the order supplied on the command
 line, even when the scorecard sorts the results. A unique verified candidate
-is a review hint, **never** an export or reassignment approval.
+is a review hint, **never** an export or automatic reassignment approval. JSON
+reports contain full local file paths; treat them as private.
 
 ### Optional Rust frame matcher
 
@@ -286,12 +292,19 @@ cannot accidentally be applied to an entire season.
 
 For hearing checks, **Hörprobe …** opens a bounded A/B player: choose a
 reference position and switch between **A · Bildmaster** and **B · Sprachfassung**.
-Once both 12-second WAV windows have been generated, switching is immediate;
+Choose a **12-, 30- or 60-second** audition window. Once both WAV windows for
+the same reference position and length have been generated, switching is immediate;
 pause, stop and scrub within the loaded window using the accessible controls.
 No full-track audio is loaded into memory, and the latest four previews are
 cached only in a private temporary folder that is removed when the app closes.
 Qt audio playback requires a working local sound backend; the existing external
 player remains the fallback. A listening check never enables an unsafe export.
+
+Before an individual export starts, a scrollable **Export-Vorprüfung** lists
+the picture master, each selected added track, the destination and their
+ready/caution/blocked reasons. A blocked check disables **Export starten**.
+The final exporter independently verifies the resulting MKV; the preview is
+not an export certificate.
 
 ## Correctness comes first
 

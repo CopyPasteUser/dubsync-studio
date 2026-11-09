@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSlider, QWidget
 
 
 class AudioPreviewTransport(QWidget):
-    """Playback and seek of a *completed*, at most 15-second local preview."""
+    """Playback and seek of a *completed*, at most 60-second local preview."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -102,14 +102,15 @@ class AudioPreviewTransport(QWidget):
             self.player.setPosition(self.seek.value())
 
     def _duration_changed(self, milliseconds: int):
-        self.seek.setMaximum(max(0, min(15_000, milliseconds)))
+        self.seek.setMaximum(max(0, min(60_000, milliseconds)))
         self._position_changed(self.seek.value())
 
     def _position_changed(self, milliseconds: int):
         if not self._dragging:
             self.seek.setValue(max(0, min(self.seek.maximum(), milliseconds)))
         self.position_label.setText(
-            f"00:{self.seek.value() // 1000:02d} / 00:{self.seek.maximum() // 1000:02d}")
+            f"{self.seek.value() // 60_000:02d}:{self.seek.value() // 1000 % 60:02d} / "
+            f"{self.seek.maximum() // 60_000:02d}:{self.seek.maximum() // 1000 % 60:02d}")
 
     def _state_changed(self, _state):
         if self.player is None:

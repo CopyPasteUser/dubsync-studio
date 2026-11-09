@@ -38,9 +38,13 @@ def rank_episode_candidates(master: str, candidates: list[str], *,
             raise RuntimeError("Kandidatenprüfung abgebrochen")
         if progress:
             progress(index, len(paths), path.name)
-        item = {"candidate": index, "filename": path.name, "status": "error",
-                "visual_proof": None, "error": None}
+        item = {"candidate": index, "filename": path.name, "path": str(path),
+                "size": None, "mtime_ns": None,
+                "status": "error", "visual_proof": None, "error": None}
         try:
+            signature = path.stat()
+            item["size"] = signature.st_size
+            item["mtime_ns"] = signature.st_mtime_ns
             result = align_videos(
                 str(path), str(master_path), interval=interval,
                 max_samples=max_samples, cancel_event=cancel_event,
@@ -80,7 +84,7 @@ def rank_episode_candidates(master: str, candidates: list[str], *,
                "multiple_visual_candidates" if verified else
                "analysis_incomplete" if any(item["status"] == "error" for item in ranked) else
                "unverified")
-    return {"master_filename": master_path.name,
+    return {"master_filename": master_path.name, "master_path": str(master_path),
             "verdict": verdict, "suggested_candidate": verified[0]["candidate"] if len(verified) == 1 else None,
             "candidates": ranked, "automatic_reassignment": False,
             "automatic_export_allowed": False}

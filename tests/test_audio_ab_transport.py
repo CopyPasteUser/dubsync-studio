@@ -62,6 +62,20 @@ class AudioABTransportTests(unittest.TestCase):
             dialog.close()
             self.assertFalse(list(Path(directory).glob("*.wav")))
 
+    def test_long_audition_request_is_explicit_and_transport_shows_minutes(self):
+        dialog = SyncPreviewDialog(_tracks(), 180.)
+        self.addCleanup(self._dispose, dialog)
+        requests = []
+        dialog.preview_requested.connect(requests.append)
+        dialog.position_combo.setCurrentIndex(3)
+        dialog.time_spin.setValue(90.)
+        dialog.duration_combo.setCurrentIndex(2)
+        dialog.source_button.click()
+        self.assertEqual(requests[-1]["sample_duration"], 60.)
+        dialog.transport._duration_changed(60_000)
+        dialog.transport._position_changed(30_000)
+        self.assertEqual(dialog.transport.position_label.text(), "00:30 / 01:00")
+
     def test_preview_ffmpeg_process_is_killed_after_cancel(self):
         window = MainWindow()
         self.addCleanup(self._dispose, window)
