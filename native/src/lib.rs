@@ -146,6 +146,71 @@ pub unsafe extern "C" fn dubsync_feature_candidates(
     count as isize
 }
 
+/// Return the six closest permitted targets for each source frame, ordered by
+/// (Hamming distance, target index), excluding distances above 18.
+/// Output triples are `(source_index, target_index, Hamming distance)`.
+///
+/// # Safety
+/// `source` and `target` must be readable for their declared lengths;
+/// `target_allowed` must contain at least `target_len` readable bytes; and
+/// `output` must contain at least `18 * source_len` writable u32 values.
+/// The writable output must not overlap input storage.
+#[no_mangle]
+pub unsafe extern "C" fn dubsync_offset_candidates(
+    source: *const u64,
+    source_len: usize,
+    target: *const u64,
+    target_len: usize,
+    target_allowed: *const u8,
+    output: *mut u32,
+    output_len: usize,
+) -> isize {
+    if source_len > MAX_SAMPLES || target_len > MAX_SAMPLES {
+        return -1;
+    }
+    if source_len == 0 || target_len == 0 {
+        return 0;
+    }
+    if source.is_null() || target.is_null() || target_allowed.is_null() || output.is_null()
+        || output_len < 18 * source_len
+    {
+        return -1;
+    }
+    let sources = std::slice::from_raw_parts(source, source_len);
+    let targets = std::slice::from_raw_parts(target, target_len);
+    let allowed = std::slice::from_raw_parts(target_allowed, target_len);
+    let out = std::slice::from_raw_parts_mut(output, output_len);
+    let mut count = 0usize;
+    for (source_index, &source_hash) in sources.iter().enumerate() {
+        let mut best = [(19u32, usize::MAX); 6];
+        for (target_index, &target_hash) in targets.iter().enumerate() {
+            if allowed[target_index] == 0 {
+                continue;
+            }
+            let distance = (source_hash ^ target_hash).count_ones();
+            if distance > 18 {
+                continue;
+            }
+            let candidate = (distance, target_index);
+            if let Some(position) = best.iter().position(|&current| candidate < current) {
+                best.copy_within(position..5, position + 1);
+                best[position] = candidate;
+            }
+        }
+        for (distance, target_index) in best {
+            if target_index == usize::MAX {
+                break;
+            }
+            let position = count * 3;
+            out[position] = source_index as u32;
+            out[position + 1] = target_index as u32;
+            out[position + 2] = distance;
+            count += 1;
+        }
+    }
+    count as isize
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,6 +276,44 @@ mod tests {
         assert_eq!(unsafe {
             dubsync_feature_candidates(std::ptr::null(), 0, std::ptr::null(), 0,
                                        std::ptr::null_mut(), 0)
+        }, 0);
+    }
+
+    #[test]
+    fn offset_candidates_preserve_ties_and_ignore_repeated_targets() {
+        let source = [0u64, u64::MAX];
+        let target = [0u64, 1, 0, 2, 4, 8, 16, 32, u64::MAX];
+        let allowed = [1u8, 1, 0, 1, 1, 1, 1, 1, 1];
+        let mut output = [999u32; 36];
+        let count = unsafe {
+            dubsync_offset_candidates(source.as_ptr(), 2, target.as_ptr(), target.len(),
+                                      allowed.as_ptr(), output.as_mut_ptr(), output.len())
+        };
+        assert_eq!(count, 7);
+        assert_eq!(&output[..21], &[0, 0, 0, 0, 1, 1, 0, 3, 1,
+                                    0, 4, 1, 0, 5, 1, 0, 6, 1, 1, 8, 0]);
+    }
+
+    #[test]
+    fn offset_candidates_reject_invalid_bounds() {
+        let frames = [0u64];
+        let allowed = [1u8];
+        let mut output = [0u32; 18];
+        assert_eq!(unsafe {
+            dubsync_offset_candidates(frames.as_ptr(), 5001, frames.as_ptr(), 1,
+                                      allowed.as_ptr(), output.as_mut_ptr(), 18)
+        }, -1);
+        assert_eq!(unsafe {
+            dubsync_offset_candidates(frames.as_ptr(), 1, frames.as_ptr(), 1,
+                                      std::ptr::null(), output.as_mut_ptr(), 18)
+        }, -1);
+        assert_eq!(unsafe {
+            dubsync_offset_candidates(frames.as_ptr(), 1, frames.as_ptr(), 1,
+                                      allowed.as_ptr(), output.as_mut_ptr(), 17)
+        }, -1);
+        assert_eq!(unsafe {
+            dubsync_offset_candidates(std::ptr::null(), 0, std::ptr::null(), 0,
+                                      std::ptr::null(), std::ptr::null_mut(), 0)
         }, 0);
     }
 }

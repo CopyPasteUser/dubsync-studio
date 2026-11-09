@@ -1,5 +1,11 @@
 # Unreleased · Headless workflow and resource safety (2026-11-09)
 
+- Added a third native Rust hot path: bounded six-best visual probing for
+  long intro/outro offsets, preserving repeated-frame exclusions, distance
+  thresholds and existing conservative episode-match gates. Python fallback
+  remains exact; native-vs-reference tests and median-time CI benchmarks cover
+  the new extension. `--doctor` now reports all three acceleration paths.
+
 - Extended the optional, dependency-free Rust engine with a bounded feature
   candidate scan for difficult scene cuts. It preserves deterministic
   Hamming-distance/tie ordering and conservative alignment rules, while old

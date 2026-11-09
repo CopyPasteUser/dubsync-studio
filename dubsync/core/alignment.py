@@ -25,7 +25,7 @@ from .ffmpeg_sampling import (SamplingBackendError, ffmpeg_sample,
                               choose_verified_decoder)
 from .frame_cache import FrameSampleCache, source_identity
 from .network import is_network_path
-from .native_match import native_feature_candidates, native_pairs
+from .native_match import native_feature_candidates, native_offset_candidates, native_pairs
 from .performance import sampling_worker_policy, system_specs
 
 Progress = Callable[[str, int, int], None]
@@ -774,6 +774,37 @@ def _feature_anchor_fallback(source: list[FrameSample], target: list[FrameSample
 
 
 
+def _offset_probe_candidates(source_hashes: list[int], target_hashes: list[int],
+                             allowed_targets: list[bool], cancel_event=None
+                             ) -> list[tuple[int, int, int]]:
+    """Find six closest permitted targets per probe, without weakening matching.
+
+    The optional Rust scanner avoids repeated Python bit-count loops; the
+    deterministic scalar path preserves behavior on unsupported platforms.
+    """
+    if cancel_event is not None and cancel_event.is_set():
+        raise AlignmentError("Frameabgleich abgebrochen.")
+    native = native_offset_candidates(source_hashes, target_hashes, allowed_targets)
+    if native is not None:
+        if cancel_event is not None and cancel_event.is_set():
+            raise AlignmentError("Frameabgleich abgebrochen.")
+        return native
+    candidates: list[tuple[int, int, int]] = []
+    for source_index, source_hash in enumerate(source_hashes):
+        if cancel_event is not None and cancel_event.is_set():
+            raise AlignmentError("Frameabgleich abgebrochen.")
+        matching = []
+        for target_index, (target_hash, allowed) in enumerate(zip(target_hashes, allowed_targets)):
+            if not allowed:
+                continue
+            distance = (source_hash ^ target_hash).bit_count()
+            if distance <= 18:
+                matching.append((distance, target_index))
+        for distance, target_index in sorted(matching)[:6]:
+            candidates.append((source_index, target_index, distance))
+    return candidates
+
+
 def _long_offset_alignment(
     source: list[FrameSample], target: list[FrameSample],
     source_path: str, target_path: str, source_info: MediaInfo,
@@ -800,28 +831,25 @@ def _long_offset_alignment(
                      for i in range(min(n, 110))]
     bin_width = max(0.8, effective_interval * 1.25)
     votes: dict[int, dict[int, tuple[float, int]]] = {}
-    for source_index in probe_indices:
+    eligible_probes = [index for index in probe_indices
+                       if source_frequency[source[index].phash] <= source_repeat_limit]
+    probe_matches = _offset_probe_candidates(
+        [source[index].phash for index in eligible_probes],
+        [item.phash for item in target],
+        [target_frequency[item.phash] <= target_repeat_limit for item in target],
+        cancel_event,
+    )
+    for probe_ordinal, target_index, distance in probe_matches:
         if cancel_event is not None and cancel_event.is_set():
             raise AlignmentError("Frameabgleich abgebrochen.")
+        source_index = eligible_probes[probe_ordinal]
         item = source[source_index]
-        if source_frequency[item.phash] > source_repeat_limit:
-            continue
-        # Take several candidates, not only the two visually nearest images:
-        # short repeated cartoon scenes can otherwise obscure the true match.
-        candidates = []
-        for target_index, other in enumerate(target):
-            if target_frequency[other.phash] > target_repeat_limit:
-                continue
-            distance = (item.phash ^ other.phash).bit_count()
-            if distance <= 18:
-                candidates.append((distance, target_index))
-        for distance, target_index in sorted(candidates)[:6]:
-            shift = target[target_index].time - item.time
-            bin_index = round(shift / bin_width)
-            bucket = votes.setdefault(bin_index, {})
-            current = bucket.get(source_index)
-            if current is None or distance < current[1]:
-                bucket[source_index] = (shift, distance)
+        shift = target[target_index].time - item.time
+        bin_index = round(shift / bin_width)
+        bucket = votes.setdefault(bin_index, {})
+        current = bucket.get(source_index)
+        if current is None or distance < current[1]:
+            bucket[source_index] = (shift, distance)
 
     if not votes:
         if diagnostic is not None:

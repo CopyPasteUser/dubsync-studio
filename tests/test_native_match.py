@@ -6,9 +6,10 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from dubsync.core.alignment import (AlignmentError, FrameSample,
+from dubsync.core.alignment import (AlignmentError, FrameSample, _offset_probe_candidates,
                                    _feature_candidate_pairs, _sequence_alignment)
-from dubsync.core.native_match import _library, native_feature_candidates, native_pairs
+from dubsync.core.native_match import (_library, native_feature_candidates,
+                                       native_offset_candidates, native_pairs)
 
 
 def scalar_candidates(source, target):
@@ -25,6 +26,7 @@ class NativeBridgeCompatibilityTests(unittest.TestCase):
     def test_old_rust_binary_without_optional_candidate_symbol_falls_back(self):
         with patch("dubsync.core.native_match._library", return_value=object()):
             self.assertIsNone(native_feature_candidates([0], [0]))
+            self.assertIsNone(native_offset_candidates([0], [0], [True]))
 
 
 @unittest.skipUnless(_library() is not None, "Optional Rust library not built")
@@ -91,6 +93,35 @@ class RustFeatureCandidateTests(unittest.TestCase):
         self.assertIsNone(native_feature_candidates([0] * 5001, [0]))
         self.assertEqual(native_feature_candidates([], [0]), [])
         self.assertIsNotNone(native_pairs([0], [0]))
+
+
+@unittest.skipUnless(_library() is not None and
+                     hasattr(_library(), "dubsync_offset_candidates"),
+                     "Optional Rust offset candidate extension not built")
+class RustOffsetCandidateTests(unittest.TestCase):
+    def test_rust_matches_scalar_with_duplicate_hashes_and_filtered_targets(self):
+        rng = random.Random(4320)
+        for case in range(90):
+            hashes = [rng.getrandbits(64) for _ in range(rng.randrange(0, 55))]
+            if hashes and case % 4 == 0:
+                hashes[::5] = [hashes[0]] * len(hashes[::5])
+            target = hashes + [rng.getrandbits(64) for _ in range(14)]
+            if case % 3 == 0:
+                target.extend(hashes[:5])
+            permitted = [i % 7 != (case % 7) for i in range(len(target))]
+            with self.subTest(case=case):
+                native = native_offset_candidates(hashes, target, permitted)
+                with patch("dubsync.core.alignment.native_offset_candidates", return_value=None):
+                    scalar = _offset_probe_candidates(hashes, target, permitted)
+                self.assertEqual(native, scalar)
+                self.assertEqual(_offset_probe_candidates(hashes, target, permitted), scalar)
+
+    def test_invalid_offset_candidate_arguments(self):
+        self.assertIsNone(native_offset_candidates([-1], [0], [True]))
+        self.assertIsNone(native_offset_candidates([0], [0], []))
+        self.assertIsNone(native_offset_candidates([0], [0], [2]))
+        self.assertIsNone(native_offset_candidates([0] * 5001, [0], [True]))
+        self.assertEqual(native_offset_candidates([], [0], [True]), [])
 
 
 if __name__ == "__main__":

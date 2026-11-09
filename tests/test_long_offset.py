@@ -6,7 +6,8 @@ from unittest.mock import patch
 
 import numpy as np
 
-from dubsync.core.alignment import FrameSample, _long_offset_alignment, align_videos, AlignmentError
+from dubsync.core.alignment import (FrameSample, _long_offset_alignment,
+                                   _offset_probe_candidates, align_videos, AlignmentError)
 from dubsync.core.models import AlignmentResult, Anchor, MediaInfo, StreamInfo
 
 
@@ -23,6 +24,30 @@ class LongOffsetTests(unittest.TestCase):
     def frames(self, count, start=0):
         return [FrameSample(float(i + start), int(self.rng.integers(0, 2**63, dtype=np.int64)))
                 for i in range(count)]
+
+    def test_offset_candidates_match_reference_including_masks_and_ties(self):
+        source_hashes = [0, 7, (1 << 64) - 1]
+        target_hashes = [0, 0, 1, 2, 4, 8, 16, 32, 7, (1 << 64) - 1]
+        allowed = [True, False, True, True, True, True, True, True, True, True]
+        expected = []
+        for si, source_hash in enumerate(source_hashes):
+            closest = sorted(((source_hash ^ target_hash).bit_count(), ti)
+                             for ti, target_hash in enumerate(target_hashes)
+                             if allowed[ti] and (source_hash ^ target_hash).bit_count() <= 18)
+            expected.extend((si, ti, distance) for distance, ti in closest[:6])
+        self.assertEqual(_offset_probe_candidates(source_hashes, target_hashes, allowed), expected)
+
+    def test_native_offset_path_and_cancellation_after_scan(self):
+        import threading
+        event = threading.Event()
+
+        def native_call(*_args):
+            event.set()
+            return [(0, 0, 0)]
+
+        with patch("dubsync.core.alignment.native_offset_candidates", side_effect=native_call):
+            with self.assertRaises(AlignmentError):
+                _offset_probe_candidates([0], [0], [True], event)
 
     def check(self, source, target, allowed=True):
         result = _long_offset_alignment(source, target, "source.mkv", "master.mkv",

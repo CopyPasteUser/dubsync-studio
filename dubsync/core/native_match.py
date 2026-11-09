@@ -34,6 +34,13 @@ def _library():
         if candidate_scan is not None:
             candidate_scan.argtypes = lib.dubsync_match.argtypes
             candidate_scan.restype = ctypes.c_ssize_t
+        offset_scan = getattr(lib, "dubsync_offset_candidates", None)
+        if offset_scan is not None:
+            offset_scan.argtypes = [ctypes.POINTER(ctypes.c_uint64), ctypes.c_size_t,
+                                    ctypes.POINTER(ctypes.c_uint64), ctypes.c_size_t,
+                                    ctypes.POINTER(ctypes.c_uint8),
+                                    ctypes.POINTER(ctypes.c_uint32), ctypes.c_size_t]
+            offset_scan.restype = ctypes.c_ssize_t
         return lib
     except (AttributeError, OSError):
         return None
@@ -86,6 +93,39 @@ def native_feature_candidates(source_hashes: list[int], target_hashes: list[int]
     capacity = 6 * len(source_hashes)
     output = (ctypes.c_uint32 * capacity)()
     count = scan(sources, len(sources), targets, len(targets), output, capacity)
+    if count < 0 or count > capacity // 3:
+        return None
+    return [(int(output[3 * i]), int(output[3 * i + 1]), int(output[3 * i + 2]))
+            for i in range(count)]
+
+
+def native_offset_candidates(source_hashes: list[int], target_hashes: list[int],
+                             allowed_targets: list[bool]
+                             ) -> list[tuple[int, int, int]] | None:
+    """Nearest six distinct source/target/distance triples, excluding masked targets.
+
+    Missing optional symbols or invalid inputs return None for a safe scalar
+    fallback. The caller keeps the existing conservative scene/offset gates.
+    """
+    lib = _library()
+    scan = getattr(lib, "dubsync_offset_candidates", None) if lib is not None else None
+    if (scan is None or len(source_hashes) > 5000 or len(target_hashes) > 5000
+            or len(allowed_targets) != len(target_hashes)):
+        return None
+    if any(not isinstance(value, int) or not 0 <= value < 2**64
+           for value in chain(source_hashes, target_hashes)):
+        return None
+    if any(not isinstance(allowed, (bool, int)) or allowed not in (0, 1)
+           for allowed in allowed_targets):
+        return None
+    if not source_hashes or not target_hashes:
+        return []
+    sources = (ctypes.c_uint64 * len(source_hashes))(*source_hashes)
+    targets = (ctypes.c_uint64 * len(target_hashes))(*target_hashes)
+    allowed = (ctypes.c_uint8 * len(allowed_targets))(*allowed_targets)
+    capacity = 18 * len(source_hashes)
+    output = (ctypes.c_uint32 * capacity)()
+    count = scan(sources, len(sources), targets, len(targets), allowed, output, capacity)
     if count < 0 or count > capacity // 3:
         return None
     return [(int(output[3 * i]), int(output[3 * i + 1]), int(output[3 * i + 2]))

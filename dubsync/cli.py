@@ -41,7 +41,12 @@ def doctor_report() -> dict[str, Any]:
         "recommended_analysis_profile": recommended_profile(specs),
     }
     from dubsync.core.native_match import _library
-    result["hardware"]["rust_frame_matcher"] = _library() is not None
+    native = _library()
+    result["hardware"]["rust_frame_matcher"] = native is not None
+    result["hardware"]["rust_feature_candidates"] = (
+        native is not None and hasattr(native, "dubsync_feature_candidates"))
+    result["hardware"]["rust_offset_candidates"] = (
+        native is not None and hasattr(native, "dubsync_offset_candidates"))
     from dubsync.core.ffmpeg_sampling import (ffmpeg_hardware_accels, likely_gpu_accel,
                                               gpu_decode_candidates)
     result["hardware"]["ffmpeg_acceleration_interfaces"] = sorted(ffmpeg_hardware_accels())
@@ -379,6 +384,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  Erkanntes GPU-Vendor: {', '.join(hardware['gpu_vendors_detected']) or 'nicht erkannt'}")
             print(f"  Empfohlenes Analyseprofil: {hardware['recommended_analysis_profile']}")
             print(f"  Rust-Frame-Abgleich: {'verfügbar' if hardware['rust_frame_matcher'] else 'NumPy-Fallback'}")
+            print(f"  Rust-Szenenkandidaten: {'verfügbar' if hardware['rust_feature_candidates'] else 'NumPy-Fallback'}")
+            print(f"  Rust-Intro-/Offset-Suche: {'verfügbar' if hardware['rust_offset_candidates'] else 'Python-Fallback'}")
             print("\nMedienwerkzeuge:")
             for name, info in report["media_tools"].items():
                 print(f"  {'OK' if info['available'] else 'FEHLT'}  {name}: {info.get('version', info.get('path', 'nicht gefunden'))}")
