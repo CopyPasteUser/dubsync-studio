@@ -34,7 +34,7 @@ def test_redesign_is_wired_and_preserves_episode_safety_code():
     batch = (ROOT / "dubsync/core/batch.py").read_text()
     assert "def _build_workspace_shell(" in gui
     assert '"Studio", "Episode wählen · Bildanker prüfen' in gui
-    assert '"Stapelzentrale", "Aufträge kontrollieren' in gui
+    assert '"Stapelzentrale", "Aufträge prüfen und fortsetzen' in gui
     assert '"Aktivität & Diagnose", "Jede Episode' in gui
     assert 'splitter.insertWidget(1, review_scroll)' in gui
     assert 'self.queue_room = QueueControlRoom()' in gui

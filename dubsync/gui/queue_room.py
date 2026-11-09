@@ -6,7 +6,8 @@ from typing import Any
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QFrame, QHBoxLayout, QHeaderView, QLabel,
-    QPushButton, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QPushButton, QSizePolicy, QStackedWidget, QTableWidget, QTableWidgetItem,
+    QVBoxLayout, QWidget,
 )
 
 
@@ -15,6 +16,7 @@ class QueueControlRoom(QFrame):
     retryRequested = Signal(str)
     drainRequested = Signal()
     refreshRequested = Signal()
+    studioRequested = Signal()
 
     STATE_LABELS = {
         "queued": "Bereit", "running": "In Arbeit", "paused": "Pausiert",
@@ -64,20 +66,35 @@ class QueueControlRoom(QFrame):
         self.table.itemSelectionChanged.connect(self._selection_changed)
         self.table.setMinimumHeight(175)
         self.queue_surface = QStackedWidget()
-        self.queue_empty = QLabel("Noch keine Stapelaufträge\n\nScanne deine Sprachfassungen und plane den ersten Serien-Stapel ein.")
+        self.queue_empty = QWidget()
         self.queue_empty.setAccessibleName("Keine gespeicherten Stapelaufträge")
-        self.queue_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.queue_empty.setWordWrap(True)
         self.queue_empty.setObjectName("emptyState")
+        empty_line = QHBoxLayout(self.queue_empty)
+        empty_line.setContentsMargins(10, 4, 10, 4)
+        empty_line.setSpacing(12)
+        empty_hint = QLabel(
+            "Noch keine Aufträge gespeichert. Wähle im Studio Medienquellen, "
+            "scanne die Episoden und plane dann einen Stapel."
+        )
+        empty_hint.setWordWrap(True)
+        empty_hint.setObjectName("mutedText")
+        empty_line.addWidget(empty_hint, 1)
+        self.studio_button = QPushButton("Zum Studio")
+        self.studio_button.setAccessibleName("Zum Studio wechseln, um Medienquellen hinzuzufügen")
+        self.studio_button.clicked.connect(self.studioRequested)
+        empty_line.addWidget(self.studio_button)
         self.queue_surface.addWidget(self.queue_empty)
         self.queue_surface.addWidget(self.table)
-        layout.addWidget(self.queue_surface, 1)
+        layout.addWidget(self.queue_surface)
 
         self.detail_label = QLabel("Nach einem Neustart bleiben Aufträge erhalten. Fortsetzen verifiziert fertige MKVs erneut.")
         self.detail_label.setObjectName("mutedText")
         self.detail_label.setWordWrap(True)
         layout.addWidget(self.detail_label)
-        buttons = QHBoxLayout()
+        self.actions_widget = QWidget()
+        buttons = QHBoxLayout(self.actions_widget)
+        buttons.setContentsMargins(0, 0, 0, 0)
+        buttons.setSpacing(8)
         self.start_button = QPushButton("Starten / fortsetzen")
         self.start_button.setObjectName("primaryButton")
         self.start_button.clicked.connect(self._start)
@@ -89,7 +106,7 @@ class QueueControlRoom(QFrame):
         self.drain_button.clicked.connect(self.drainRequested)
         buttons.addWidget(self.drain_button)
         buttons.addStretch(1)
-        layout.addLayout(buttons)
+        layout.addWidget(self.actions_widget)
         self.set_entries([])
 
     def selected(self) -> dict[str, Any] | None:
@@ -122,9 +139,24 @@ class QueueControlRoom(QFrame):
             self.table.selectRow(restore)
         self.table.blockSignals(False)
         self.queue_surface.setCurrentIndex(1 if entries else 0)
+        if entries:
+            self.queue_surface.setMinimumHeight(175)
+            self.queue_surface.setMaximumHeight(360)
+        else:
+            # The large empty table used to hide the actual export settings.
+            self.queue_surface.setFixedHeight(72)
+        self.detail_label.setVisible(bool(entries))
+        self.actions_widget.setVisible(bool(entries))
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         pending = sum(entry.get("state") in self.STARTABLE for entry in entries)
         self.count_label.setText(f"{len(entries)} Aufträge · {pending} startbar")
         self._selection_changed()
+
+    def show_unavailable(self, reason: str) -> None:
+        """Keep a persistent, readable failure state even without queue rows."""
+        self.set_entries([])
+        self.detail_label.setText(reason)
+        self.detail_label.show()
 
     def _selection_changed(self) -> None:
         entry = self.selected()

@@ -23,7 +23,7 @@ No billing, authentication or cloud CRUD is present.
 | Adaptive resource presets | MainWindow.profile_quick_combo / PerformanceSettingsDialog | core/performance.py | Auto recommends one of Leicht/Mittel/Stark; custom retains manual budgets | tests/test_performance.py; tests/test_gui_smoke.py; tests/test_studio_workspace.py |
 | CPU decoder autotuning | gui/autotune.py / PerformanceSettingsDialog | core/autotune.py + core/performance.py host-bound opt-in | local single-file QThread benchmark, exact parity gate, explicit accept then settings save; NAS excluded | tests/test_autotune.py; tests/test_gui_smoke.py; tests/test_parallel_sampling.py |
 | Durable batch queue | BatchQueueDialog / QTableWidget | core/job_queue.py SQLite entries; core/batch_diagnostics.py proof | explicit start/restart/retry/drain; no implicit startup | tests/test_job_queue.py; tests/test_gui_smoke.py |
-| Inline queue room | QueueControlRoom / QTableWidget | same BatchJobQueue SQLite `recent()`; original start/retry/drain callbacks | scrollable 2.0 Stapelzentrale; original dialog retained | tests/test_workbench_2.py |
+| Inline queue room | QueueControlRoom / QTableWidget | same BatchJobQueue SQLite `recent()`; original start/retry/drain callbacks | compact empty state with Studio navigation; bounded populated list; load failures remain visible; original dialog retained | tests/test_workbench_2.py; tests/test_studio_workspace.py |
 | Visual review | StudioReviewPanel / AlignmentTimeline | live selected AlignmentResult and MediaInfo | anchor/segment plot; user-chosen source; explicit two-still loading | tests/test_workbench_2.py; real NAS pending |
 | Visual evidence | AlignmentTimeline / core/evidence.py | observed anchors plus immutable alignment mapping | sampled / unverified / unmapped; largest-gap navigation; no export mutation | tests/test_evidence.py |
 | Audio A/B | StudioReviewPanel / gui/audio_review.py | explicit 18 s FFmpeg excerpts | two independent waveforms; unmatched source remains empty | tests/test_audio_review.py |
@@ -60,6 +60,11 @@ No billing, authentication or cloud CRUD is present.
   use the same verified core actions/authorization as the legacy queue dialog;
   automatic drain processes queued entries only. Real progress is refreshed
   while a queued worker is active without polling media files.
+- Batch empty state: an absent saved queue shows one short explanation and a
+  native **Zum Studio** navigation action, not a full-size empty table with
+  disabled job actions. Queue read failures remain visible. Detected
+  multilingual episode groups are labelled separately from persisted jobs;
+  neither label establishes permission to export.
 - Analyse/export: existing QThread → progress dock → existing completion/error reports.
   Duplicate tasks and profile changes are disabled during processing. Pause remains
   cooperative and cancel releases pause. No new domain transitions introduced.

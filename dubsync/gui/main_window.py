@@ -2115,7 +2115,7 @@ class MainWindow(QMainWindow):
         ex.setContentsMargins(4, 2, 3, 4)
         ex.setSpacing(14)
         ex.addWidget(self._page_heading(
-            "Stapelzentrale", "Aufträge kontrollieren, fortsetzen oder prüfen · unten Ziel und Leistungsprofil festlegen."
+            "Stapelzentrale", "Aufträge prüfen und fortsetzen · Ausgabe, Untertitel und Leistung konfigurieren."
         ))
         summary_card = QFrame()
         summary_card.setObjectName("heroCard")
@@ -2135,7 +2135,7 @@ class MainWindow(QMainWindow):
         export_bar = self.export_button.parentWidget().layout()  # created in original export strip
         export_bar.removeWidget(self.batch_button)
         self.batch_button.setParent(None)
-        self.batch_button.setText("Gesamten Stapel starten  →")
+        self.batch_button.setText("Serienstapel prüfen und starten →")
         self.batch_button.setObjectName("primaryButton")
         self.batch_button.setMinimumHeight(44)
         self.queue_button = QPushButton("Queue-Details …")
@@ -2180,13 +2180,14 @@ class MainWindow(QMainWindow):
         perf.addWidget(self.profile_tradeoff)
         ex.addWidget(perf_card)
         self.queue_room = QueueControlRoom()
+        self.queue_room.studioRequested.connect(lambda: self._navigate_to(0))
         self.queue_room.startRequested.connect(self._start_inline_queued_batch)
         self.queue_room.retryRequested.connect(self._retry_inline_queue)
         self.queue_room.drainRequested.connect(self._drain_inline_queue)
         self.queue_room.refreshRequested.connect(self._refresh_inline_queue)
         # Operations-first: persisted jobs are visible before the long settings
         # form; setup stays below in the same independently scrolling page.
-        ex.insertWidget(1, self.queue_room, 1)
+        ex.insertWidget(1, self.queue_room)
         export_scroll = QScrollArea()
         export_scroll.setObjectName("pageScroll")
         export_scroll.setWidgetResizable(True)
@@ -2401,14 +2402,12 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "queue_room"):
             return
         if self.batch_queue is None:
-            self.queue_room.set_entries([])
-            self.queue_room.detail_label.setText("Warteschlange nicht verfügbar; Details im Systemprotokoll.")
+            self.queue_room.show_unavailable("Warteschlange nicht verfügbar; Details im Systemprotokoll.")
             return
         try:
             entries = self.batch_queue.recent(100)
         except (QueueError, OSError, ValueError) as exc:
-            self.queue_room.set_entries([])
-            self.queue_room.detail_label.setText(f"Warteschlange kann nicht geladen werden: {exc}")
+            self.queue_room.show_unavailable(f"Warteschlange kann nicht geladen werden: {exc}")
             return
         self.queue_room.set_entries(entries, busy=self.worker is not None)
 
@@ -2439,7 +2438,9 @@ class MainWindow(QMainWindow):
             return
         count = sum(len(group.files) >= 2 for group in self.groups)
         missing = sum(len(group.files) < 2 for group in self.groups)
-        self.export_overview_label.setText(f"{count} Episoden im Stapel" if count else "Noch keine Episoden im Stapel")
+        self.export_overview_label.setText(
+            f"{count} Episoden mit mehreren Fassungen" if count else "Noch keine mehrsprachigen Episoden"
+        )
         self.export_overview_detail.setText(
             f"{len(self.groups)} Gruppen erkannt · {count} mit mindestens zwei Videodateien"
             + (f" · {missing} nur mit einer Fassung" if missing else "")

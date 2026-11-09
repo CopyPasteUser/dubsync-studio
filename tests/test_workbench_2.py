@@ -194,6 +194,29 @@ class QueueRoomTests(unittest.TestCase):
             room.close()
             room.deleteLater()
 
+    def test_empty_queue_keeps_setup_action_visible_without_disabled_controls(self):
+        room = QueueControlRoom()
+        try:
+            room.show()
+            self.app.processEvents()
+            self.assertEqual(room.queue_surface.height(), 72)
+            self.assertTrue(room.actions_widget.isHidden())
+            self.assertTrue(room.detail_label.isHidden())
+            requests = []
+            room.studioRequested.connect(lambda: requests.append("studio"))
+            room.studio_button.click()
+            self.assertEqual(requests, ["studio"])
+            room.show_unavailable("Warteschlange kann nicht geladen werden: Testfehler")
+            self.assertFalse(room.detail_label.isHidden())
+            self.assertIn("Testfehler", room.detail_label.text())
+            room.set_entries([{"id": "test", "label": "Episode", "state": "queued"}])
+            self.app.processEvents()
+            self.assertFalse(room.actions_widget.isHidden())
+            self.assertGreaterEqual(room.queue_surface.height(), 175)
+        finally:
+            room.close()
+            room.deleteLater()
+
 
 if __name__ == "__main__":
     unittest.main()

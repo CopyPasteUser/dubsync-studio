@@ -338,6 +338,7 @@ open release gates. GPU benchmarking verifies *output equivalence and speed*,
 not actual utilization of GPU silicon.
 
 Read the [roadmap to stable 3.0](docs/ROADMAP_NEXT.md),
+[feature and UX overhaul plan](docs/STUDIO_OVERHAUL.md),
 [release checklist](docs/RELEASE_CHECKLIST.md),
 [architecture](docs/ARCHITECTURE.md), [security notes](SECURITY.md), or
 [changelog](CHANGELOG.md).

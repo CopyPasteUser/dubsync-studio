@@ -113,6 +113,18 @@ def test_small_window_can_scroll_to_last_track_and_export_options(window):
     assert window.profile_quick_combo.isVisible()
 
 
+def test_batch_empty_state_shows_output_setup_before_scrolling(window):
+    window.resize(1440, 900)
+    window._navigate_to(1)
+    QApplication.processEvents()
+    assert window.queue_room.queue_surface.height() == 72
+    assert window.output_dir_edit.isVisible()
+    assert window.output_dir_edit.mapTo(window, window.output_dir_edit.rect().topLeft()).y() < 730
+    assert window.export_overview_label.text() == 'Noch keine mehrsprachigen Episoden'
+    window.queue_room.studio_button.click()
+    assert window._page_stack.currentIndex() == 0
+
+
 def test_busy_and_error_feedback_keep_recovery_accessible(window):
     window._set_controls_enabled(False)
     assert not window.scan_button.isEnabled()
