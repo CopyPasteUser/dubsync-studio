@@ -61,6 +61,12 @@ on both sides of that call, while NumPy keeps per-row cooperative cancellation.
 The diagnostic identifies the selected backend. No previous match, safety
 decision or source file is cached or trusted because the native path is active.
 
+Native binaries are deliberately excluded from universal (`py3-none-any`)
+wheels: a shared library built on Linux is not portable to other CPUs or
+desktop operating systems. Source/desktop installations build locally when
+Cargo is available, and otherwise use NumPy. The release workflow checks that
+packaged wheels retain the SVG asset without accidentally shipping a host `.so`.
+
 When the initial correspondence is unsafe, the alternative affine feature
 matcher considers the two strongest visual matches per source frame. It uses
 one bounded NumPy Hamming vector per frame and evaluates candidate time models
