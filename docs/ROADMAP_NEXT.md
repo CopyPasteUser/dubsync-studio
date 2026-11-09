@@ -33,6 +33,14 @@ GPU benchmark overhead from full decode time. Remaining: sustained-load and
 CPU-thread autotuning informed by actual hardware measurements, plus physical
 VAAPI/CUDA/NAS throughput acceptance. No new end-to-end speedup is claimed.
 
+**CPU-thread qualification follow-up (2026-11-09):** `--benchmark-threads`
+now tests three distributed windows for local episodes ≥15 minutes instead of
+extrapolating a fast opening to the entire video. All sampled fingerprints in
+all windows and repetitions must match the default. Recommendations require
+≥15% improvement in aggregate and ≥90% of default speed in the weakest
+window. Run order alternates to reduce cache and thermal bias. No settings are
+automatically changed, and there is no measured end-to-end speed claim.
+
 | Track | Status | Acceptance / outstanding work |
 | --- | --- | --- |
 | 2.0 · Reliable foundation | **Implemented; physical QA pending** | Native three-column studio, bounded image previews, cautious resume, atomic export. Test real process crashes, NAS loss and recovery before a stable label. |
