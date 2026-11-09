@@ -80,6 +80,27 @@ that two files contain the same episode. JSON scan output contains full local
 file paths, so keep it private. Queue status reports counts and recent progress,
 without source paths or stored failure logs; it does not start or resume jobs.
 
+### Episode candidate explorer (visual evidence)
+
+In the Studio inspector, select a picture master and click **Kandidaten …**
+to choose up to eight other videos. DubSync ranks them by actual frame alignment,
+requiring stronger evidence from separate interior episode sections before
+labeling a candidate verified. Shared intros or credits alone do not qualify.
+The result is **inspection-only**: nothing is reassigned, renamed, or exported.
+Disconnected NAS files and decoder failures are reported as errors, **not** as
+negative visual matches. On large libraries, review a small candidate set at a
+time; the first pass decodes video and can take several minutes.
+
+The same report is available without Qt:
+
+```bash
+./run.sh --explore-episode "/mnt/media/master.mkv" "/mnt/media/dub1.mkv" "/mnt/media/dub2.mkv" --json
+```
+
+Candidate indexes in the report refer to the order supplied on the command
+line, even when the scorecard sorts the results. A unique verified candidate
+is a review hint, **never** an export or reassignment approval.
+
 ### Optional Rust frame matcher
 
 The video-frame sequence matcher can run in a small Rust library while all

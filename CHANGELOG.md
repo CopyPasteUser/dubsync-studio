@@ -541,3 +541,14 @@ Native workspace redesign, centralized Qt theme, collapsible sources, honest pen
 - Deterministic cross-backend parity tests for cuts, duplicate frames and 64-bit
   hashes; a standalone matcher benchmark compares both implementations without
   reading user media. Physical end-to-end speed and cancellation QA remain open.
+
+# Unreleased · Read-only episode candidate explorer (2026-11-09)
+
+- Desktop inspector now accepts up to eight explicitly selected cross-episode
+  video candidates. The result dialog ranks visual evidence and distinguishes
+  verified interior scenes, insufficient matches, missing anchors and failures.
+- New `--explore-episode MASTER CANDIDATE... --json` CLI supports the same
+  guarded comparison without running Qt; repeated master frames can reuse the
+  fingerprint-validated frame cache to reduce decoding work.
+- No automatic episode reassignment, filename changes, confidence bypass or
+  export; targeted CLI, classification, cancellation and Qt offscreen tests.
