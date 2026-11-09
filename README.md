@@ -295,10 +295,20 @@ reference position and switch between **A · Bildmaster** and **B · Sprachfassu
 Choose a **12-, 30- or 60-second** audition window. Once both WAV windows for
 the same reference position and length have been generated, switching is immediate;
 pause, stop and scrub within the loaded window using the accessible controls.
-No full-track audio is loaded into memory, and the latest four previews are
-cached only in a private temporary folder that is removed when the app closes.
+For longer listening, optionally enable **Nächsten Abschnitt automatisch vorladen
+und abspielen**. DubSync then preloads one following WAV excerpt shortly before
+the current one ends and starts it automatically. This is **not sample-accurate
+gapless playback**: Qt may introduce a short pause between windows, especially
+if extraction is still running. Automatic playback stops at a source end, the
+reference end or an unverified cut; it does not skip over unmatched dialogue.
+Pressing **Stopp** cancels automatic continuation, even if a prefetch is still
+finishing. Switching A/B or choosing another reference point starts a fresh
+listening sequence. No full-track audio is loaded into memory, and the latest
+four bounded previews are cached only in a private temporary folder that is
+removed when the app closes.
 Qt audio playback requires a working local sound backend; the existing external
-player remains the fallback. A listening check never enables an unsafe export.
+player remains the fallback for individual excerpts (continuous listening is
+unavailable without in-app audio). A listening check never enables an unsafe export.
 
 Before an individual export starts, a scrollable **Export-Vorprüfung** lists
 the picture master, each selected added track, the destination and their
