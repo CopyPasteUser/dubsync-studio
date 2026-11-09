@@ -74,7 +74,9 @@ Native dialogs retain platform focus behavior.
 ### Foundational visual states
 Explicit hover, pressed, focus, disabled and selected rules. Disabled primary
 buttons lose their accent. Busy state uses real progress and existing worker
-signals. Empty library and no-results states explain the next action.
+signals. Empty library and no-results states explain the next action. Empty
+batch queues use one compact explanatory row and a navigable setup action so
+output configuration remains visible; populated job lists scroll internally.
 
 ### Buttons and actions
 One accent action per decision area. Cancel is outlined in danger tone, never the
