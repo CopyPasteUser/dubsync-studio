@@ -75,3 +75,22 @@ match unpaired/edited scenes. Online results and machine transcriptions should
 be reviewed for timing and correctness before permanent archiving. Batch jobs
 remember their subtitle recipe; one manually picked file or pasted video URL
 cannot accidentally be applied to an entire season.
+
+## Persistent subtitle cache
+
+**Fast repeats / resume:** Successfully validated **online and generated** SRT
+tracks are reused from a private persistent cache when the same picture-master
+file, cut, language, provider and (for ASR) Whisper model are requested again.
+The source file's size, modification time, sampled content fingerprint and
+duration form the identity; it is not just a filename lookup. This avoids
+repeat provider requests and expensive transcription when exporting again or
+resuming a batch. Local sidecars, ZIPs and embedded tracks are always checked
+**before** the expensive cache so newly added or modified captions take
+precedence. Online results expire after 14 days; generated results after 60
+days. Cache storage is capped at 256 tracks / 128 MiB, with a 5 MiB per-track
+limit and private filesystem permissions. The usual location is
+`~/.cache/dubsync-studio/subtitles/` (or `$XDG_CACHE_HOME/dubsync-studio/subtitles/`).
+Set `DUBSYNC_SUBTITLE_CACHE=0` to disable it, or
+`DUBSYNC_SUBTITLE_CACHE_DIR=/private/path` to choose a different cache folder.
+Removing that dedicated folder while DubSync is closed clears saved captions;
+it does not remove any original media, exported MKVs or user-supplied files.
