@@ -42,9 +42,10 @@ They do not demonstrate a completed export or measured GPU performance.</sub>
 - **Hardware-aware performance:** Light / Balanced / Maximum resource presets;
   Intel iGPU, AMD and NVIDIA decoder candidates are measured against a CPU
   reference on local videos. Long H.264/H.265 videos are checked at three
-  separate points, including the middle and later scenes; an inaccurate or
-  notably slower segment keeps CPU decoding. NAS media skip these extra
-  reads. A manual decoder self-test is available under System Diagnostics.
+  separate points, including the middle and later scenes, but candidates that
+  fail the first check are eliminated before additional reads. When free RAM
+  falls below 2 GiB, DubSync uses one decoder; NAS media skip extra probes.
+  A manual decoder self-test is available under System Diagnostics.
 
 ## Get started
 

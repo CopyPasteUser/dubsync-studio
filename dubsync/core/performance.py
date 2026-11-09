@@ -398,6 +398,11 @@ def sampling_worker_policy(source: str, master: str, requested: int,
     detected = specs if specs is not None else system_specs()
     if int(detected.get("logical_cpus", 1)) < 4 or float(detected.get("ram_gib", 0)) < 8:
         return 1, "CPU- oder RAM-Budget für zwei Decoder zu klein"
+    # Total RAM and saved presets do not reflect other applications currently
+    # running. Re-evaluate the available host/cgroup headroom for each pair.
+    free_gib = available_memory_gib()
+    if free_gib is not None and free_gib < 2.0:
+        return 1, "Weniger als 2 GiB freier RAM: zweiter Decoder ausgesetzt"
     if hardware_accel == "auto":
         from .ffmpeg_sampling import likely_gpu_accel
         if likely_gpu_accel() is not None:
@@ -413,11 +418,14 @@ def performance_diagnostics(settings: dict[str, Any] | None = None) -> str:
     from .frame_cache import FrameSampleCache
     cfg = normalize_performance_settings(settings or {})
     specs = system_specs()
+    free_gib = available_memory_gib()
     lines = [
         f"CPU model: {specs['cpu_model']}",
         f"CPU logical threads available: {specs['logical_cpus']}",
         f"Physical CPU cores detected: {specs['physical_cores']}",
         f"Memory limit/visible RAM: {specs['ram_gib']:.1f} GiB",
+        f"Available RAM for decoder workers: {free_gib:.1f} GiB" if free_gib is not None
+        else "Available RAM for decoder workers: unknown",
         "GPU vendors detected: " + (", ".join(specs["gpu_vendors"]) if specs["gpu_vendors"] else "not detected via DRM sysfs"),
         f"Hardware decoder interface available: {'yes' if _hardware_decoder_available(specs) else 'not detected; CPU path recommended'}",
         f"Recommended profile: {recommended_profile(specs)}",

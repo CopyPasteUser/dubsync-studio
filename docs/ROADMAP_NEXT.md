@@ -25,6 +25,14 @@ Suggested order: complete the physical 3.0 acceptance gates, then the candidate
 explorer and audition tools. Optimization work should be driven by recorded
 pipeline timings, not hypothetical language speedups.
 
+**Adaptive throughput progress (2026-11-09):** long-form GPU verification now
+performs a cheap first-window preflight and skips remaining windows for
+already-ineligible devices. Runtime worker policy also reduces two decoders to
+one below 2 GiB currently free host/cgroup memory. Per-video diagnostics split
+GPU benchmark overhead from full decode time. Remaining: sustained-load and
+CPU-thread autotuning informed by actual hardware measurements, plus physical
+VAAPI/CUDA/NAS throughput acceptance. No new end-to-end speedup is claimed.
+
 | Track | Status | Acceptance / outstanding work |
 | --- | --- | --- |
 | 2.0 · Reliable foundation | **Implemented; physical QA pending** | Native three-column studio, bounded image previews, cautious resume, atomic export. Test real process crashes, NAS loss and recovery before a stable label. |

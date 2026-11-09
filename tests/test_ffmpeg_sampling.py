@@ -200,6 +200,33 @@ class FFmpegSamplingTests(unittest.TestCase):
             sample_video(str(self.path), 1800., .5, hardware_accel="auto", video_codec="h264")
             bench.assert_not_called()
 
+    def test_gpu_diagnostics_separate_benchmark_from_full_decoding(self):
+        from dubsync.core.alignment import _GPU_HINTS, sample_video
+        from dubsync.core.alignment_diagnostics import AlignmentDiagnostic, summarize_diagnostic
+        _GPU_HINTS.clear()
+        self.addCleanup(_GPU_HINTS.clear)
+        candidate = DecoderCandidate("cuda", "cuda")
+        speeds = {"cpu": {"frames": 8, "samples_per_second": 10},
+                  "cuda": {"frames": 8, "samples_per_second": 25,
+                           "frame_match_ratio": 1., "median_hamming_to_cpu": 0,
+                           "worst_window_speed_ratio": 1.2}}
+        diag = AlignmentDiagnostic(str(self.path), str(self.path), .5, 12000, "auto")
+        with (mock.patch("dubsync.core.alignment.gpu_decode_candidates", return_value=[candidate]),
+              mock.patch("dubsync.core.alignment.is_network_path", return_value=False),
+              mock.patch("dubsync.core.alignment.benchmark_decoder_candidates", return_value=speeds),
+              mock.patch("dubsync.core.alignment.ffmpeg_sample",
+                         return_value=[(i * .5, i) for i in range(12)])):
+            sample_video(str(self.path), 1800., .5, hardware_accel="auto",
+                         video_codec="hevc", diagnostic=diag)
+
+        stage = diag.payload["stages"]["sample_master"]
+        self.assertEqual(stage["selected_decoder"], "cuda")
+        self.assertIn("gpu_benchmark_seconds", stage)
+        self.assertIn("decode_seconds", stage)
+        self.assertGreaterEqual(stage["elapsed_s"], stage["decode_seconds"])
+        self.assertEqual(stage["benchmark"], speeds)
+        self.assertIn("GPU-Prüfung", summarize_diagnostic(diag.payload))
+
     def test_multisegment_benchmark_rejects_corrupt_middle_window(self):
         from dubsync.core.ffmpeg_sampling import choose_verified_decoder
         candidate = DecoderCandidate("cuda", "cuda")
@@ -218,9 +245,10 @@ class FFmpegSamplingTests(unittest.TestCase):
                                                    candidates=[candidate], seconds=4.,
                                                    probe_starts=(0., 480., 800.))
 
-        self.assertEqual(results["cpu"]["probe_windows"], 3)
+        self.assertEqual(results["cpu"]["probe_windows"], 2)
         self.assertIn("Bildparität", results["cuda"]["error"])
-        self.assertEqual(len(seen), 5)  # No reason to sample a third corrupt GPU window.
+        self.assertEqual(len(seen), 4)  # Neither decoder needs the third window.
+        self.assertEqual(seen, [(None, 0.), ("cuda", 0.), (None, 480.), ("cuda", 480.)])
         self.assertIsNone(choose_verified_decoder(results, [candidate]))
 
     def test_multisegment_benchmark_rejects_slow_middle_window(self):
@@ -230,19 +258,63 @@ class FFmpegSamplingTests(unittest.TestCase):
         def sample(*_args, **_kwargs):
             return [(index * .5, index) for index in range(8)]
 
-        # CPU: 3 x 10s; GPU: 5s, 12s, 5s. Average GPU speed wins,
-        # but a sustained slow section must keep automatic decoding on CPU.
-        ticks = [0., 10., 10., 20., 20., 30., 30., 35., 35., 47., 47., 52.]
+        # CPU: 2 x 10s; GPU: 5s and 12s. Its second section already
+        # violates the per-window gate, so the third section is unnecessary.
+        ticks = [0., 10., 10., 15., 15., 25., 25., 37.]
         with (mock.patch("dubsync.core.ffmpeg_sampling.ffmpeg_sample", side_effect=sample),
               mock.patch("dubsync.core.ffmpeg_sampling.time.monotonic", side_effect=ticks)):
             results = benchmark_decoder_candidates("dummy.mkv", 1000., .5, lambda _: 0,
                                                    candidates=[candidate], seconds=4.,
                                                    probe_starts=(0., 480., 800.))
 
-        self.assertGreater(results["intel"]["samples_per_second"],
-                           results["cpu"]["samples_per_second"] * 1.15)
-        self.assertLess(results["intel"]["worst_window_speed_ratio"], .90)
+        self.assertEqual(results["cpu"]["probe_windows"], 2)
+        self.assertIn("langsamer", results["intel"]["error"])
         self.assertIsNone(choose_verified_decoder(results, [candidate]))
+
+    def test_multisegment_benchmark_skips_slow_gpu_after_initial_window(self):
+        from dubsync.core.ffmpeg_sampling import choose_verified_decoder
+        slow = DecoderCandidate("slow", "vaapi")
+        fast = DecoderCandidate("fast", "cuda")
+        seen = []
+
+        def sample(*_args, accel=None, start_seconds=0., **_kwargs):
+            seen.append((accel, start_seconds))
+            return [(index * .5, index + int(start_seconds)) for index in range(8)]
+
+        # Fast GPU must still visit all windows; slow GPU fails 0.90 gate
+        # immediately, without triggering any unnecessary long-form probes.
+        ticks = [0., 10., 10., 30., 30., 35., 35., 45., 45., 50., 50., 60., 60., 65.]
+        with (mock.patch("dubsync.core.ffmpeg_sampling.ffmpeg_sample", side_effect=sample),
+              mock.patch("dubsync.core.ffmpeg_sampling.time.monotonic", side_effect=ticks)):
+            results = benchmark_decoder_candidates("dummy.mkv", 1000., .5, lambda _: 0,
+                                                   candidates=[slow, fast], seconds=4.,
+                                                   probe_starts=(0., 480., 800.))
+
+        self.assertEqual(results["cpu"]["probe_windows"], 3)
+        self.assertEqual(results["fast"]["probe_windows"], 3)
+        self.assertEqual(results["slow"]["probe_windows"], 1)
+        self.assertEqual(seen, [(None, 0.), ("vaapi", 0.), ("cuda", 0.),
+                                (None, 480.), ("cuda", 480.), (None, 800.), ("cuda", 800.)])
+        self.assertEqual(choose_verified_decoder(results, [slow, fast]), fast)
+
+    def test_multisegment_benchmark_skips_all_later_windows_when_gpu_is_slow(self):
+        candidate = DecoderCandidate("cuda", "cuda")
+        calls = []
+
+        def sample(*_args, accel=None, start_seconds=0., **_kwargs):
+            calls.append((accel, start_seconds))
+            return [(index * .5, index) for index in range(8)]
+
+        with (mock.patch("dubsync.core.ffmpeg_sampling.ffmpeg_sample", side_effect=sample),
+              mock.patch("dubsync.core.ffmpeg_sampling.time.monotonic",
+                         side_effect=[0., 10., 10., 30.])):
+            results = benchmark_decoder_candidates("dummy.mkv", 1000., .5, lambda _: 0,
+                                                   candidates=[candidate], seconds=4.,
+                                                   probe_starts=(0., 480., 800.))
+
+        self.assertEqual(results["cpu"]["probe_windows"], 1)
+        self.assertIn("langsamer", results["cuda"]["error"])
+        self.assertEqual(calls, [(None, 0.), ("cuda", 0.)])
 
     def test_multisegment_benchmark_accepts_consistently_fast_gpu(self):
         from dubsync.core.ffmpeg_sampling import choose_verified_decoder
@@ -251,7 +323,7 @@ class FFmpegSamplingTests(unittest.TestCase):
         def sample(*_args, **_kwargs):
             return [(index * .5, index) for index in range(8)]
 
-        ticks = [0., 10., 10., 20., 20., 30., 30., 35., 35., 40., 40., 45.]
+        ticks = [0., 10., 10., 15., 15., 25., 25., 30., 30., 40., 40., 45.]
         with (mock.patch("dubsync.core.ffmpeg_sampling.ffmpeg_sample", side_effect=sample),
               mock.patch("dubsync.core.ffmpeg_sampling.time.monotonic", side_effect=ticks)):
             results = benchmark_decoder_candidates("dummy.mkv", 1000., .5, lambda _: 0,
