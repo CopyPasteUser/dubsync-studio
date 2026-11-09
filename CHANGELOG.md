@@ -552,3 +552,15 @@ Native workspace redesign, centralized Qt theme, collapsible sources, honest pen
   fingerprint-validated frame cache to reduce decoding work.
 - No automatic episode reassignment, filename changes, confidence bypass or
   export; targeted CLI, classification, cancellation and Qt offscreen tests.
+
+# Unreleased · Bounded A/B audio transport (2026-11-09)
+
+- Synchronized 12-second reference-timeline A/B audition in Qt: Master/Source
+  selection, native play/pause/stop/scrub and four-entry preview cache for fast
+  switching at an unchanged master timestamp. External player fallback remains.
+- FFmpeg subprocess now supports cancellation while decoding instead of waiting
+  up to 90 seconds, with bounded audio resources and file/pipe-only protocols.
+- Private WAV excerpts are unlinked on dialog/application close; test coverage
+  includes A/B timing, cache eviction, cancellation and temporary file cleanup.
+- Seamless full-length streaming and real sound-device QA remain future work;
+  audio never supplies visual-match or export authorization.

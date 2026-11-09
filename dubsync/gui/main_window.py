@@ -12,6 +12,7 @@ import sys
 import subprocess
 import threading
 import traceback
+from collections import OrderedDict
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Any
@@ -31,6 +32,7 @@ from PySide6.QtWidgets import (
 from dubsync.gui.theme import studio_stylesheet
 from dubsync.gui.workbench import StudioReviewPanel
 from dubsync.gui.episode_explorer import EpisodeExplorerDialog
+from dubsync.gui.audio_transport import AudioPreviewTransport
 from dubsync.gui.queue_room import QueueControlRoom
 
 from dubsync.core.alignment import AlignmentError, align_videos
@@ -562,16 +564,18 @@ class AlignmentResidualPlot(QWidget):
 
 
 class SyncPreviewDialog(QDialog):
-    """Choose a target-video time and an audio track for an aligned external-player sample."""
+    """Inspect bounded target-aligned A/B excerpts with in-app seek transport."""
     preview_requested = Signal(object)
 
     def __init__(self, tracks: list[dict[str, Any]], duration: float, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Synchronisierte Hörprobe")
         self.setMinimumWidth(500)
-        self.resize(560, 300)
+        self.resize(585, 365)
         self.tracks = tracks
         self.duration = max(0.1, float(duration))
+        self._cache: OrderedDict[tuple[int, float], str] = OrderedDict()
+        self._pending_key: tuple[int, float] | None = None
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
         intro = QLabel(
@@ -605,14 +609,31 @@ class SyncPreviewDialog(QDialog):
         self.status.setWordWrap(True)
         self.status.setObjectName("mutedText")
         layout.addWidget(self.status)
+        switch_row = QHBoxLayout()
+        self.master_button = QPushButton("A · Bildmaster")
+        self.master_button.setAccessibleName("Bildmaster-Audiospur abspielen")
+        self.master_button.clicked.connect(self._request_master)
+        switch_row.addWidget(self.master_button)
+        self.source_button = QPushButton("B · Sprachfassung")
+        self.source_button.setAccessibleName("Ausgewählte Sprachfassung abspielen")
+        self.source_button.clicked.connect(self._request_source)
+        switch_row.addWidget(self.source_button)
+        layout.addLayout(switch_row)
+        self.transport = AudioPreviewTransport(self)
+        layout.addWidget(self.transport)
+        if not self.transport.available:
+            self.status.setText("In-App-Audio nicht verfügbar; Hörproben öffnen sich im externen Player.")
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        self.play_button = buttons.addButton("Hörprobe abspielen", QDialogButtonBox.ButtonRole.AcceptRole)
+        buttons.button(QDialogButtonBox.StandardButton.Close).setText("Schließen")
+        self.play_button = buttons.addButton("Auswahl abspielen", QDialogButtonBox.ButtonRole.AcceptRole)
         self.play_button.setObjectName("primaryButton")
         self.play_button.clicked.connect(self._request_preview)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         self.position_combo.currentIndexChanged.connect(self._position_preset_changed)
         self._position_preset_changed(0)
+        initial_source = next((i for i, track in enumerate(tracks) if not track.get("master")), 0)
+        self.track_combo.setCurrentIndex(initial_source)
 
     def _position_preset_changed(self, _index: int):
         fraction = self.position_combo.currentData()
@@ -622,16 +643,66 @@ class SyncPreviewDialog(QDialog):
             self.time_spin.setValue(self.duration * float(fraction))
 
     def _request_preview(self):
+        self._request_preview_for(self.track_combo.currentIndex())
+
+    def _request_master(self):
+        index = next((i for i, track in enumerate(self.tracks) if track.get("master")), -1)
+        self._request_preview_for(index)
+
+    def _request_source(self):
         index = self.track_combo.currentIndex()
+        if index >= 0 and self.tracks[index].get("master"):
+            index = next((i for i, track in enumerate(self.tracks) if not track.get("master")), -1)
+            if index >= 0:
+                self.track_combo.setCurrentIndex(index)
+        self._request_preview_for(index)
+
+    def _request_preview_for(self, index: int):
         if index < 0 or index >= len(self.tracks):
             return
+        key = (index, round(self.time_spin.value(), 2))
+        cached = self._cache.get(key)
+        if cached and Path(cached).is_file() and self.transport.play_clip(cached):
+            self._cache.move_to_end(key)
+            self.status.setText(f"A/B-Fassung aus kurzem Zwischenspeicher · Referenz {key[1]:.2f} s")
+            return
+        self.transport.stop()
+        self._pending_key = key
         payload = dict(self.tracks[index])
-        payload["target_time"] = self.time_spin.value()
+        payload["target_time"] = key[1]
         payload["sample_duration"] = 12.0
         self.status.setText(
-            f"Referenzzeit {self.time_spin.value():.2f} s · die passende Quellposition wird anhand der Zeitkorrektur berechnet."
+            f"Referenzzeit {key[1]:.2f} s · die passende Quellposition wird anhand der Zeitkorrektur berechnet."
         )
         self.preview_requested.emit(payload)
+
+    def preview_ready(self, path: str) -> bool:
+        """Cache at most four short WAV windows and play using native Qt audio."""
+        key = self._pending_key
+        self._pending_key = None
+        if key is None:
+            return False
+        self._cache[key] = path
+        self._cache.move_to_end(key)
+        self.transport.release()
+        while len(self._cache) > 4:
+            _, stale = self._cache.popitem(last=False)
+            if stale != path:
+                try:
+                    Path(stale).unlink(missing_ok=True)
+                except OSError:
+                    pass  # Private previews are also cleared at app shutdown.
+        return self.transport.play_clip(path)
+
+    def closeEvent(self, event):
+        self.transport.release()
+        for path in self._cache.values():
+            try:
+                Path(path).unlink(missing_ok=True)
+            except OSError:
+                pass
+        self._cache.clear()
+        super().closeEvent(event)
 
 
 class SourceRow(QFrame):
@@ -4118,27 +4189,43 @@ class MainWindow(QMainWindow):
             ffmpeg, _ffprobe = require_media_tools()
             command = [
                 ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+                "-protocol_whitelist", "file,pipe", "-threads", "2",
                 "-ss", f"{source_time:.4f}", "-i", path,
                 "-map", f"0:{stream_index}", "-t", f"{duration:.2f}",
                 "-vn", "-ac", "2", "-ar", "44100", "-c:a", "pcm_s16le", str(output),
             ]
             report("Hörprobe aus der synchronisierten Quellzeit extrahieren …", 0, 1)
+            completed = False
+            process = None
             try:
-                result = subprocess.run(command, capture_output=True, text=True, timeout=90, check=False)
-            except subprocess.TimeoutExpired as exc:
-                raise RuntimeError("FFmpeg-Zeitlimit beim Erzeugen der Hörprobe.") from exc
-            if cancel_event.is_set():
-                try:
-                    output.unlink(missing_ok=True)
-                except OSError:
-                    pass
-                raise RuntimeError("Hörprobe abgebrochen.")
-            if result.returncode != 0 or not output.is_file() or output.stat().st_size < 44:
-                try:
-                    output.unlink(missing_ok=True)
-                except OSError:
-                    pass
-                raise RuntimeError("FFmpeg konnte die Hörprobe nicht erzeugen: " + (result.stderr.strip()[-900:] or "leere WAV-Datei"))
+                process = subprocess.Popen(command, stdin=subprocess.DEVNULL,
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                started = time.monotonic()
+                while True:
+                    if cancel_event.is_set():
+                        raise RuntimeError("Hörprobe abgebrochen.")
+                    try:
+                        _, stderr = process.communicate(timeout=.25)
+                        break
+                    except subprocess.TimeoutExpired:
+                        if time.monotonic() - started > 90.:
+                            raise RuntimeError("FFmpeg-Zeitlimit beim Erzeugen der Hörprobe.")
+                if cancel_event.is_set():
+                    raise RuntimeError("Hörprobe abgebrochen.")
+                if process.returncode != 0 or not output.is_file() or output.stat().st_size < 44:
+                    raise RuntimeError("FFmpeg konnte die Hörprobe nicht erzeugen: " +
+                                       (stderr.decode("utf-8", errors="replace").strip()[-900:]
+                                        or "leere WAV-Datei"))
+                completed = True
+            finally:
+                if process is not None and process.poll() is None:
+                    process.kill()
+                    process.communicate()
+                if not completed:
+                    try:
+                        output.unlink(missing_ok=True)
+                    except OSError:
+                        pass
             report("Hörprobe bereit", 1, 1)
             return str(output)
 
@@ -4151,6 +4238,8 @@ class MainWindow(QMainWindow):
             return
         try:
             dialog.play_button.setEnabled(not busy)
+            dialog.master_button.setEnabled(not busy)
+            dialog.source_button.setEnabled(not busy)
             if message:
                 dialog.status.setText(message)
             if not busy:
@@ -4160,7 +4249,19 @@ class MainWindow(QMainWindow):
             self._preview_dialog = None
 
     def _preview_clip_ready(self, path: str):
+        dialog = self._preview_dialog
         self._set_preview_dialog_busy(False, "Hörprobe bereit. Du kannst einen anderen Zeitpunkt wählen und erneut vergleichen.")
+        if dialog is not None:
+            try:
+                if not dialog.isVisible():
+                    self.statusBar().showMessage("Hörprobe wurde erstellt; der Dialog ist bereits geschlossen.", 4500)
+                    return
+                if dialog.preview_ready(path):
+                    self.statusBar().showMessage("Hörprobe wird im A/B-Player abgespielt.", 4500)
+                    return
+            except RuntimeError:
+                # A closed/deleted Qt dialog must not crash the worker callback.
+                return
         player = shutil.which("ffplay")
         if player:
             try:
@@ -4932,6 +5033,12 @@ class MainWindow(QMainWindow):
             return
         self._save_settings()
         self._session_cache_dir.cleanup()
+        # WAV excerpts are private, short-lived artifacts. Never retain old
+        # language tracks in /tmp after the main application is closed.
+        try:
+            shutil.rmtree(self._preview_directory)
+        except OSError as exc:
+            self._logger.warning("Hörprobenordner konnte nicht entfernt werden: %s", exc)
         event.accept()
 
 
