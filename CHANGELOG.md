@@ -1,5 +1,15 @@
 # Unreleased · Headless workflow and resource safety (2026-11-09)
 
+- Faster local CPU video alignment on capable machines: the balanced preset
+  now requests two independent FFmpeg decoders when at least four physical
+  cores, four logical CPUs and 8 GiB RAM are available. The per-video NAS,
+  low-memory and automatic GPU-comparison guards still force serial sampling
+  when necessary; the lightweight preset retains its lower resource budget.
+  On synthetic 1080p/H.264 input, median local full-alignment time improved
+  from 1.881s to 1.487s with 9 CPUs (1.27x); with affinity restricted to 4
+  CPUs it improved from 2.555s to 2.458s (1.04x). Both returned the same
+  conservative alignment decision; real NAS and other-codec QA remain open.
+
 - Accelerated the per-frame DCT perceptual hash without changing cached hash
   bits: one 63-element order statistic replaces a general median, and bit
   packing replaces a 63-iteration Python loop. FFmpeg's already-small 32x32

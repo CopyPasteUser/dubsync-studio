@@ -211,8 +211,11 @@ def _recommended_values(preset: str, specs: dict[str, Any]) -> dict[str, Any]:
         probes = min(8, physical)
     values["cpu_threads"] = min(logical, threads)
     values["probe_workers"] = max(1, min(logical, probes))
-    values["sampling_workers"] = (2 if chosen == "quality" and logical >= 4
-                                  and ram >= 8 else 1)
+    # Independent local video decoders finish materially sooner on machines
+    # with >=4 physical CPU cores. Preserve the low-resource fast preset;
+    # NAS/GPU and runtime memory safety guards are applied per source pair.
+    values["sampling_workers"] = (2 if chosen in ("balanced", "quality")
+                                  and physical >= 4 and logical >= 4 and ram >= 8 else 1)
     values["prewarm_metadata"] = chosen == "quality" and ram >= 8
     if ram < 6.0:
         values["cpu_threads"] = min(values["cpu_threads"], 2 if chosen != "quality" else 4)
