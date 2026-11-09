@@ -1,5 +1,15 @@
 # Unreleased · Headless workflow and resource safety (2026-11-09)
 
+- FFmpeg CPU-decoder threads now respect the current process's CPU affinity
+  and cgroup quota, even if OpenCV or a user thread request reports more host
+  CPUs. This prevents oversubscribing restricted Linux desktops/containers.
+  In a deliberately over-requested 64-thread versus 9-CPU synthetic comparison,
+  1080p/H.264 sampling was 0.478s vs 0.343s (1.39×); a low-resolution MPEG-4
+  clip was 0.231s vs 0.181s (1.28×), with identical sampled hashes. These are
+  constrained-host scenarios, not an improvement claim for ordinary 9-CPU
+  desktops already requesting only 9 decoder threads. GPU selection and
+  matching/export safety gates are unchanged.
+
 - Native FFmpeg video-sampling filter now scales YUV frames to 32×32 before
   grayscale conversion, avoiding full-resolution gray frame writes. On a
   synthetic 1080p/H.264 30-second clip the sampling median changed from

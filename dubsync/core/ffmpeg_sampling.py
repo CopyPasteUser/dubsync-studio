@@ -19,6 +19,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
+from .performance import _cpu_count
+
 if TYPE_CHECKING:
     import numpy as np
 
@@ -148,9 +150,9 @@ def _capture_command(path: str, interval: float, max_frames: int,
             threads = int(cv2.getNumThreads())
         except (ImportError, AttributeError, ValueError):
             threads = int(os.cpu_count() or 2)
-    # The adaptive preset already caps the request. Large workstations may
-    # use more than twelve threads without a hidden FFmpeg-side limit.
-    command += ["-threads", str(max(1, min(int(os.cpu_count() or threads), threads))), "-i", path]
+    # Avoid decoding with the host's full CPU count inside a small cgroup or
+    # affinity-restricted session, including explicit thread requests.
+    command += ["-threads", str(max(1, min(_cpu_count(), threads))), "-i", path]
     command += ["-map", "0:v:0", "-an", "-sn", "-dn"]
     if limit_seconds is not None:
         command += ["-t", f"{limit_seconds:.3f}"]

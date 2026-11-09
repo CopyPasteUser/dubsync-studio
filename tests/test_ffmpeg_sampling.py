@@ -296,9 +296,21 @@ class FFmpegSamplingTests(unittest.TestCase):
 
     def test_parallel_thread_budget_is_passed_to_ffmpeg(self):
         with (mock.patch("dubsync.core.ffmpeg_sampling.shutil.which", return_value="/usr/bin/ffmpeg"),
-              mock.patch("dubsync.core.ffmpeg_sampling.ffmpeg_hardware_accels", return_value=frozenset())):
+              mock.patch("dubsync.core.ffmpeg_sampling.ffmpeg_hardware_accels", return_value=frozenset()),
+              mock.patch("dubsync.core.ffmpeg_sampling._cpu_count", return_value=8)):
             command = _capture_command("movie.mkv", 1, 10, None, None, decode_threads=3)
         self.assertEqual(command[command.index("-threads") + 1], "3")
+
+    def test_ffmpeg_threads_respect_cgroup_budget_even_when_requested_higher(self):
+        with (mock.patch("dubsync.core.ffmpeg_sampling.shutil.which", return_value="/usr/bin/ffmpeg"),
+              mock.patch("dubsync.core.ffmpeg_sampling._cpu_count", return_value=2),
+              mock.patch("dubsync.core.ffmpeg_sampling.ffmpeg_hardware_accels", return_value=frozenset()),
+              mock.patch("cv2.getNumThreads", return_value=32)):
+            for requested in (None, 8, 1):
+                command = _capture_command("movie.mkv", 1., 10, None, None,
+                                           decode_threads=requested)
+                self.assertEqual(command[command.index("-threads") + 1],
+                                 "1" if requested == 1 else "2")
 
     def test_native_filter_scales_before_grayscale(self):
         with (mock.patch("dubsync.core.ffmpeg_sampling.shutil.which", return_value="/usr/bin/ffmpeg"),
