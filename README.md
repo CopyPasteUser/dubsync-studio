@@ -158,6 +158,11 @@ writing any settings or media:
 ./run.sh --benchmark-threads "/path/to/episode.mkv" --benchmark-seconds 20 --json
 ```
 
+The FFmpeg decoder also respects CPU affinity and cgroup quotas automatically;
+for example, a 2-CPU container cannot request 64 decoding threads even when
+OpenCV sees the full host. This is a resource-safety cap, not a claim of higher
+throughput on every machine.
+
 The output measures the default plus bounded CPU thread counts three times,
 requires **exactly identical frame fingerprints**, and only suggests a
 different value with at least a 15% median speed advantage. Use the result to
