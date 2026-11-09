@@ -22,6 +22,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .languages import normalize_language_code
 from .models import MediaInfo
+from .subtitle_cache import SubtitleCache
 
 
 class SubtitleError(RuntimeError):
@@ -447,6 +448,7 @@ def prepare_subtitles(master: Path, info: MediaInfo, options: SubtitleOptions,
     language = normalize_language_code(options.language)
     target = directory / "captions.srt"
     errors = []
+    cache = SubtitleCache()
     strategies = (["sidecar", "archive", "embedded", "subdl", "subliminal"]
                   + (["generate"] if options.mode == "auto" else [])
                   if options.mode in {"auto", "existing"} else
@@ -468,6 +470,14 @@ def prepare_subtitles(master: Path, info: MediaInfo, options: SubtitleOptions,
             progress(label)
         try:
             target.unlink(missing_ok=True)
+            # Local/embedded sources are deliberately never cached. Remote and
+            # generated results are isolated by provider, language and master.
+            cache_key = cache.key(master, info.duration, language, strategy,
+                                  options.whisper_model)
+            if cache.load(cache_key, target, duration=info.duration, strategy=strategy):
+                if progress is not None:
+                    progress("Wiederverwende geprüfte Untertitel aus privatem Cache …")
+                return target
             if strategy == "file":
                 path = Path(options.file_path).expanduser().resolve()
                 if path == master or not path.is_file():
@@ -500,6 +510,7 @@ def prepare_subtitles(master: Path, info: MediaInfo, options: SubtitleOptions,
                     try:
                         _convert_to_srt(ffmpeg, path, target, cancel_event=cancel_event)
                         _check_timing(target, info.duration)
+                        cache.store(cache_key, target)
                         return target
                     except SubtitleError as exc:
                         if "abgebrochen" in str(exc):
@@ -515,6 +526,7 @@ def prepare_subtitles(master: Path, info: MediaInfo, options: SubtitleOptions,
                                  options.whisper_model, ffmpeg, cancel_event=cancel_event)
                 _convert_to_srt(ffmpeg, path, target, cancel_event=cancel_event)
             _check_timing(target, info.duration)
+            cache.store(cache_key, target)
             return target
         except SubtitleError as exc:
             errors.append(f"{strategy}: {exc}")
