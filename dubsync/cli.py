@@ -95,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="Videobibliothek ohne GUI scannen; für mehrere Ordner wiederholen (kein Export).")
     parser.add_argument("--benchmark-decode", metavar="VIDEO", help="CPU/GPU-Dekodierleistung für ein lokales Video messen (nur lesend).")
     parser.add_argument("--benchmark-threads", metavar="VIDEO",
-                        help="CPU-FFmpeg-Threadzahlen mit Fingerprint-Parität vergleichen (nur lokales Video, keine Änderungen).")
+                        help="CPU-FFmpeg-Threadzahlen mit Fingerprint-Parität vergleichen; ab 15 Minuten an 3 Videostellen (nur lokal, keine Änderungen).")
     parser.add_argument("--profile-alignment", nargs=2, metavar=("QUELLE", "MASTER"),
                         help="Vollständigen Bildabgleich und Laufzeiten für zwei Videos prüfen (kein Export).")
     parser.add_argument("--explore-episode", nargs="+", metavar="VIDEO",
@@ -234,12 +234,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.json:
             print(json.dumps(report, ensure_ascii=False, indent=2))
         else:
-            print(f"CPU-Decodervergleich: {source.name} ({report['tested_seconds']:g} s Ausschnitt)")
+            windows = report.get("windows", [])
+            print(f"CPU-Decodervergleich: {source.name} ({report['tested_seconds']:g} s "
+                  f"über {len(windows) or 1} Prüffenster)")
             for run in report["runs"]:
                 label = run["label"]
                 if run["exact_frame_parity"]:
                     print(f"  {label}: {run['median_seconds']:.3f} s · "
-                          f"{run['speedup_vs_default']:.2f}× gegenüber Standard")
+                          f"{run['speedup_vs_default']:.2f}× gegenüber Standard"
+                          + (f" · schwächstes Fenster {run['worst_window_speedup']:.2f}×"
+                             if run.get("worst_window_speedup") is not None else ""))
                 else:
                     print(f"  {label}: fehlgeschlagen oder abweichende Fingerprints")
             suggested = report["recommended_threads"]

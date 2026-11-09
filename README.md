@@ -166,12 +166,17 @@ for example, a 2-CPU container cannot request 64 decoding threads even when
 OpenCV sees the full host. This is a resource-safety cap, not a claim of higher
 throughput on every machine.
 
-The output measures the default plus bounded CPU thread counts three times,
-requires **exactly identical frame fingerprints**, and only suggests a
-different value with at least a 15% median speed advantage. Use the result to
-adjust CPU threads in the performance settings if repeat tests agree. The
-benchmark refuses NAS mounts to avoid repeated network reads; it does not
-validate GPU throughput or physical GPU utilization.
+The output measures the default plus bounded CPU thread counts in three
+alternating repetitions. On videos lasting **15 minutes or longer**, it checks
+**three separate windows** near the beginning, middle and end (shorter videos
+use one window). Every window must produce **exactly identical frame
+fingerprints**. A different thread count is suggested only if it is at least
+15% faster overall and no individual window is more than 10% slower. The JSON
+report includes window positions, durations and the weakest-window speedup;
+these are isolated sampling timings, **not** whole-export speedups. Repeat on
+representative local files before applying a suggested setting. NAS mounts are
+refused to avoid repeated network reads; the benchmark does not validate GPU
+throughput or physical GPU utilization and never changes settings.
 
 ## Workflow
 

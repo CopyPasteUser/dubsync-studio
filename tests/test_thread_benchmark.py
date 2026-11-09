@@ -64,6 +64,66 @@ class CPUThreadBenchmarkTests(unittest.TestCase):
                                                 interval=1., repetitions=1)
         self.assertEqual([run["threads"] for run in report["runs"]], [None, 1, 2])
 
+    def test_long_video_checks_three_separated_windows_and_reverses_order(self):
+        ticks = [0.]
+        calls = []
+
+        def sample(*_args, decode_threads=None, start_seconds=0., **_kwargs):
+            calls.append((decode_threads, start_seconds))
+            ticks[0] += 1. if decode_threads is None else .5
+            return [(float(index), index + int(start_seconds)) for index in range(8)]
+
+        with (patch("dubsync.core.thread_benchmark.ffmpeg_sample", side_effect=sample),
+              patch("dubsync.core.thread_benchmark.time.perf_counter",
+                    side_effect=lambda: ticks[0])):
+            report = compare_cpu_decode_threads("movie.mkv", 1800., seconds=8.,
+                                                interval=1., repetitions=2, logical_cpus=1)
+        self.assertEqual([item["start_seconds"] for item in report["windows"]],
+                         [0., 896., 1792.])
+        self.assertEqual(report["tested_seconds"], 24.)
+        self.assertEqual(report["frames_per_run"], 24)
+        self.assertEqual(report["recommended_threads"], 1)
+        self.assertEqual(calls[:3], [(None, 0.), (None, 896.), (None, 1792.)])
+        self.assertEqual(calls[6:9], [(1, 1792.), (1, 896.), (1, 0.)])
+
+    def test_slow_late_window_rejects_fast_aggregate(self):
+        ticks = [0.]
+
+        def sample(*_args, decode_threads=None, start_seconds=0., **_kwargs):
+            costs = {None: 1., 1: 1.4 if start_seconds > 1000 else .2}
+            ticks[0] += costs[decode_threads]
+            return [(float(index), index + int(start_seconds)) for index in range(8)]
+
+        with (patch("dubsync.core.thread_benchmark.ffmpeg_sample", side_effect=sample),
+              patch("dubsync.core.thread_benchmark.time.perf_counter",
+                    side_effect=lambda: ticks[0])):
+            report = compare_cpu_decode_threads("movie.mkv", 1800., seconds=8.,
+                                                interval=1., repetitions=3, logical_cpus=1)
+        thread = next(row for row in report["runs"] if row["threads"] == 1)
+        self.assertTrue(thread["exact_frame_parity"])
+        self.assertGreater(thread["speedup_vs_default"], 1.15)
+        self.assertLess(thread["worst_window_speedup"], .9)
+        self.assertGreater(report["measured_speedup"], 1.15)
+        self.assertIsNone(report["recommended_threads"])
+
+    def test_late_window_frame_mismatch_fails_closed(self):
+        ticks = [0.]
+
+        def sample(*_args, decode_threads=None, start_seconds=0., **_kwargs):
+            ticks[0] += .5 if decode_threads == 1 else 1.
+            corrupt = decode_threads == 1 and start_seconds > 1000
+            return [(float(index), index ^ 42 if corrupt else index)
+                    for index in range(8)]
+
+        with (patch("dubsync.core.thread_benchmark.ffmpeg_sample", side_effect=sample),
+              patch("dubsync.core.thread_benchmark.time.perf_counter",
+                    side_effect=lambda: ticks[0])):
+            report = compare_cpu_decode_threads("movie.mkv", 1800., seconds=8.,
+                                                interval=1., repetitions=2, logical_cpus=1)
+        self.assertFalse(next(row for row in report["runs"] if row["threads"] == 1)
+                         ["exact_frame_parity"])
+        self.assertIsNone(report["recommended_threads"])
+
     def test_cli_json_shows_measurements_without_media_path_or_settings_change(self):
         with tempfile.TemporaryDirectory() as tmp:
             file = Path(tmp) / "test.mkv"
