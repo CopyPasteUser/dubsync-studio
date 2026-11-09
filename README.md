@@ -53,6 +53,8 @@ Run `./run.sh --doctor` for a headless environment check. [Linux installation gu
 
 **Subtitles are optional, switchable player tracks—not burned-in captions.** Automatic lookup checks local/embedded subtitles, then searches online using Subliminal and SubDL (where available), and only then attempts local Whisper transcription. A **Find only** mode never runs AI. Video-URL subtitle extraction and ZIP sources are also available. Existing video stays untouched without re-encoding.
 
+Validated online/ASR subtitles use a bounded private cache for faster repeat exports; see the [subtitle guide](docs/SUBTITLES.md) for retention and opt-out.
+
 [Subtitle sources, providers and setup](docs/SUBTITLES.md) · [Headless scans, candidate explorer, Rust matcher and benchmarking](docs/ADVANCED_WORKFLOWS.md)
 
 ## Safety and status
