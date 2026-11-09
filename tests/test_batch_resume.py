@@ -94,6 +94,12 @@ class VerifiedBatchResumeTests(unittest.TestCase):
             self.run_batch(resume_from_journal=first["batch_report_path"],
                            alignment_options={"audio_bitrate_kbps": 256})
 
+    def test_subtitle_choice_invalidates_old_resume_proof(self):
+        first, _, _ = self.run_batch()
+        with self.assertRaisesRegex(ValueError, "passt nicht"):
+            self.run_batch(resume_from_journal=first["batch_report_path"],
+                           subtitle_options={"mode": "sidecar", "language": "deu"})
+
 
 if __name__ == "__main__":
     unittest.main()
