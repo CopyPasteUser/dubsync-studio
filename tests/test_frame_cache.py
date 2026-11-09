@@ -84,6 +84,23 @@ class FrameCacheTests(unittest.TestCase):
             self.assertEqual(second, generated)
             decode.assert_called_once()
 
+    def test_auto_ffmpeg_migration_never_reuses_old_opencv_auto_fingerprints(self):
+        identity = source_identity(str(self.file))
+        cache = FrameSampleCache(self.db)
+        self.assertTrue(cache.put(identity, 12, 1., self.samples, "auto"))
+        updated = [FrameSample(stamp, hash_value ^ 0xFFFF)
+                   for stamp, hash_value in self.samples]
+        with mock.patch("dubsync.core.alignment.sample_video", return_value=updated) as decode:
+            output = _sample_with_cache(str(self.file), 12, 1., None, "Quellvideo",
+                                        None, "auto", None, cache)
+            self.assertEqual(output, updated)
+            decode.assert_called_once()
+        with mock.patch("dubsync.core.alignment.sample_video") as decode:
+            cached = _sample_with_cache(str(self.file), 12, 1., None, "Quellvideo",
+                                        None, "auto", None, FrameSampleCache(self.db))
+            self.assertEqual(cached, updated)
+            decode.assert_not_called()
+
     def test_cancellation_stops_cached_read(self):
         identity = source_identity(str(self.file))
         cache = FrameSampleCache(self.db)

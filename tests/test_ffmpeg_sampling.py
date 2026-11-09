@@ -84,7 +84,7 @@ class FFmpegSamplingTests(unittest.TestCase):
             self.assertEqual(len(result), 12)
             self.assertEqual(ffmpeg.call_args.kwargs["accel"], "cuda")
 
-    def test_auto_keeps_existing_decoder_if_gpu_is_slower(self):
+    def test_auto_uses_fast_ffmpeg_cpu_when_gpu_is_slower(self):
         from dubsync.core.alignment import sample_video
         slow = {"cpu": {"frames": 10, "samples_per_second": 30},
                 "cuda": {"frames": 10, "samples_per_second": 12,
@@ -92,10 +92,46 @@ class FFmpegSamplingTests(unittest.TestCase):
         with (mock.patch("dubsync.core.alignment.gpu_decode_candidates",
                          return_value=[DecoderCandidate("cuda", "cuda")]),
               mock.patch("dubsync.core.alignment.benchmark_decoder_candidates", return_value=slow),
-              mock.patch("dubsync.core.alignment.ffmpeg_sample") as ffmpeg):
-            self.assertGreaterEqual(len(sample_video(str(self.path), 60.0, 0.5,
-                                                     hardware_accel="auto")), 4)
-            ffmpeg.assert_not_called()
+              mock.patch("dubsync.core.alignment.ffmpeg_sample",
+                         return_value=[(i * .5, i) for i in range(12)]) as ffmpeg):
+            self.assertEqual(len(sample_video(str(self.path), 60.0, 0.5,
+                                              hardware_accel="auto")), 12)
+            self.assertIsNone(ffmpeg.call_args.kwargs["accel"])
+
+    def test_auto_defaults_to_ffmpeg_cpu_without_gpu_candidates(self):
+        from dubsync.core.alignment import sample_video
+        with (mock.patch("dubsync.core.alignment.gpu_decode_candidates", return_value=[]),
+              mock.patch("dubsync.core.alignment.ffmpeg_sample",
+                         return_value=[(i * .5, i) for i in range(8)]) as ffmpeg):
+            samples = sample_video(str(self.path), 3, .5, hardware_accel="auto")
+        self.assertEqual(len(samples), 8)
+        self.assertIsNone(ffmpeg.call_args.kwargs["accel"])
+
+    def test_auto_falls_back_to_opencv_when_ffmpeg_cpu_fails(self):
+        from dubsync.core.alignment import sample_video
+        with (mock.patch("dubsync.core.alignment.gpu_decode_candidates", return_value=[]),
+              mock.patch("dubsync.core.alignment.ffmpeg_sample",
+                         side_effect=SamplingBackendError("ffmpeg unavailable")) as ffmpeg):
+            samples = sample_video(str(self.path), 3., .5, hardware_accel="auto")
+        self.assertGreaterEqual(len(samples), 4)
+        ffmpeg.assert_called_once()
+
+    def test_auto_cancellation_does_not_retry_or_fallback(self):
+        from dubsync.core.alignment import AlignmentError, sample_video
+        cancel = threading.Event()
+
+        def interrupted(*_args, **_kwargs):
+            cancel.set()
+            raise SamplingBackendError("cancelled")
+
+        with (mock.patch("dubsync.core.alignment.gpu_decode_candidates", return_value=[]),
+              mock.patch("dubsync.core.alignment.ffmpeg_sample", side_effect=interrupted) as ffmpeg,
+              mock.patch("dubsync.core.alignment._open_capture") as opencv):
+            with self.assertRaisesRegex(AlignmentError, "abgebrochen"):
+                sample_video(str(self.path), 3., .5, hardware_accel="auto",
+                             cancel_event=cancel)
+        ffmpeg.assert_called_once()
+        opencv.assert_not_called()
 
     def test_auto_chooses_fastest_verified_igpu_on_hybrid_system(self):
         from dubsync.core.alignment import sample_video
@@ -198,10 +234,34 @@ class FFmpegSamplingTests(unittest.TestCase):
         with (mock.patch("dubsync.core.alignment.gpu_decode_candidates", return_value=available),
               mock.patch("dubsync.core.alignment.is_network_path", return_value=False),
               mock.patch("dubsync.core.alignment.benchmark_decoder_candidates", return_value=invalid),
-              mock.patch("dubsync.core.alignment.ffmpeg_sample") as ffmpeg):
+              mock.patch("dubsync.core.alignment.ffmpeg_sample",
+                         return_value=[(i * .5, i) for i in range(12)]) as ffmpeg):
             samples = sample_video(str(self.path), 60.0, 0.5, hardware_accel="auto")
-            self.assertGreaterEqual(len(samples), 4)
-            ffmpeg.assert_not_called()
+            self.assertEqual(len(samples), 12)
+            self.assertIsNone(ffmpeg.call_args.kwargs["accel"])
+
+    def test_failed_selected_gpu_retries_ffmpeg_cpu_before_opencv(self):
+        from dubsync.core.alignment import sample_video, _GPU_HINTS
+        candidate = DecoderCandidate("cuda", "cuda")
+        measurements = {"cpu": {"frames": 10, "samples_per_second": 10},
+                        "cuda": {"frames": 10, "samples_per_second": 40,
+                                 "frame_match_ratio": 1., "median_hamming_to_cpu": 0}}
+        _GPU_HINTS.clear()
+        try:
+            with (mock.patch("dubsync.core.alignment.gpu_decode_candidates", return_value=[candidate]),
+                  mock.patch("dubsync.core.alignment.is_network_path", return_value=False),
+                  mock.patch("dubsync.core.alignment.benchmark_decoder_candidates", return_value=measurements),
+                  mock.patch("dubsync.core.alignment._open_capture") as opencv,
+                  mock.patch("dubsync.core.alignment.ffmpeg_sample", side_effect=[
+                      SamplingBackendError("GPU decode failed"),
+                      [(i * .5, i) for i in range(10)]]) as ffmpeg):
+                samples = sample_video(str(self.path), 60., .5, hardware_accel="auto")
+            self.assertEqual(len(samples), 10)
+            self.assertEqual([call.kwargs["accel"] for call in ffmpeg.call_args_list],
+                             ["cuda", None])
+            opencv.assert_not_called()
+        finally:
+            _GPU_HINTS.clear()
 
     def test_auto_skips_extra_gpu_benchmark_reads_for_nas(self):
         from dubsync.core.alignment import sample_video
