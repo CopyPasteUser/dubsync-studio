@@ -126,6 +126,15 @@ def normalize_project_payload(value: Any) -> dict[str, Any]:
         group_key = _string(group_key, "Episodenschlüssel", limit=2048)
         master_overrides[group_key] = _string(master_path, "Bildmaster-Pfad")
 
+    assignments_raw = value.get("manual_candidate_assignments", {})
+    if not isinstance(assignments_raw, dict) or len(assignments_raw) > 500:
+        raise ProjectFileError("Manuelle Fassungszuordnungen sind ungültig oder zu zahlreich.")
+    candidate_assignments: dict[str, str] = {}
+    for raw_path, raw_group in assignments_raw.items():
+        path = _string(raw_path, "Kandidatenpfad")
+        group_key = _string(raw_group, "Ziel-Episodengruppe", limit=2048)
+        candidate_assignments[str(Path(path).expanduser())] = group_key
+
     manual_raw = value.get("manual_segments", [])
     if not isinstance(manual_raw, list) or len(manual_raw) > 500:
         raise ProjectFileError("Manuelle Schnittbereiche sind ungültig oder zu zahlreich.")
@@ -168,6 +177,7 @@ def normalize_project_payload(value: Any) -> dict[str, Any]:
         "performance": clean_performance,
         "track_overrides": track_overrides,
         "master_overrides": master_overrides,
+        "manual_candidate_assignments": candidate_assignments,
         "manual_segments": manual_segments,
     }
 

@@ -32,15 +32,19 @@ from PySide6.QtWidgets import (
 from dubsync.gui.theme import studio_stylesheet
 from dubsync.gui.workbench import StudioReviewPanel
 from dubsync.gui.episode_explorer import EpisodeExplorerDialog
+from dubsync.core.episode_assignment import approved_candidate_path, apply_candidate_assignments
 from dubsync.gui.audio_transport import AudioPreviewTransport
+from dubsync.gui.export_preflight import ExportPreflightDialog
 from dubsync.gui.queue_room import QueueControlRoom
 from dubsync.gui.autotune import CpuAutotuneDialog
 
 from dubsync.core.alignment import AlignmentError, align_videos
-from dubsync.core.batch import (output_path_for_group, choose_smallest_video, estimate_output_size_bytes)
+from dubsync.core.batch import (output_path_for_group, choose_smallest_video, estimate_output_size_bytes,
+                                _is_independent_episodic_match)
 from dubsync.core.cache import AlignmentCache
 from dubsync.core.session import persistent_preferences
 from dubsync.core.export import ExportError, export_multilingual
+from dubsync.core.export_preflight import inspect_single_export
 from dubsync.core.subtitles import SubtitleOptions
 from dubsync.core.fingerprint import fingerprint_many
 from dubsync.core.models import (AlignmentResult, EpisodeGroup, MediaInfo, TrackChoice,
@@ -605,7 +609,7 @@ class AlignmentResidualPlot(QWidget):
 
 
 class SyncPreviewDialog(QDialog):
-    """Inspect bounded target-aligned A/B excerpts with in-app seek transport."""
+    """Inspect bounded target-aligned A/B excerpts, including longer audition windows."""
     preview_requested = Signal(object)
 
     def __init__(self, tracks: list[dict[str, Any]], duration: float, parent=None):
@@ -615,12 +619,12 @@ class SyncPreviewDialog(QDialog):
         self.resize(585, 365)
         self.tracks = tracks
         self.duration = max(0.1, float(duration))
-        self._cache: OrderedDict[tuple[int, float], str] = OrderedDict()
-        self._pending_key: tuple[int, float] | None = None
+        self._cache: OrderedDict[tuple[int, float, float], str] = OrderedDict()
+        self._pending_key: tuple[int, float, float] | None = None
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
         intro = QLabel(
-            "Erzeuge eine kurze Hörprobe an mehreren Stellen der Referenz-Timeline. "
+            "Vergleiche kurze oder längere Hörproben an mehreren Stellen der Referenz-Timeline. "
             "DubSync berechnet für Zusatzspuren die passende Quellzeit aus der aktuellen Zeitkorrektur."
         )
         intro.setWordWrap(True)
@@ -645,8 +649,14 @@ class SyncPreviewDialog(QDialog):
         self.time_spin.setSuffix(" s auf der Referenz-Timeline")
         self.time_spin.setAccessibleName("Zeitpunkt auf Referenz-Timeline")
         form.addRow("Position", self.time_spin)
+        self.duration_combo = QComboBox()
+        for seconds, label in ((12., "12 Sekunden · schnell"), (30., "30 Sekunden"),
+                               (60., "60 Sekunden · längerer Vergleich")):
+            self.duration_combo.addItem(label, seconds)
+        self.duration_combo.setAccessibleName("Länge des Audiovergleichs")
+        form.addRow("Hörprobenlänge", self.duration_combo)
         layout.addLayout(form)
-        self.status = QLabel("Die Probe ist auf 12 Sekunden begrenzt.")
+        self.status = QLabel("Hörprobe wählen · maximal 60 Sekunden pro Fassung, ohne Dateiveränderung.")
         self.status.setWordWrap(True)
         self.status.setObjectName("mutedText")
         layout.addWidget(self.status)
@@ -701,24 +711,24 @@ class SyncPreviewDialog(QDialog):
     def _request_preview_for(self, index: int):
         if index < 0 or index >= len(self.tracks):
             return
-        key = (index, round(self.time_spin.value(), 2))
+        key = (index, round(self.time_spin.value(), 2), float(self.duration_combo.currentData()))
         cached = self._cache.get(key)
         if cached and Path(cached).is_file() and self.transport.play_clip(cached):
             self._cache.move_to_end(key)
-            self.status.setText(f"A/B-Fassung aus kurzem Zwischenspeicher · Referenz {key[1]:.2f} s")
+            self.status.setText(f"A/B-Fassung aus privatem Zwischenspeicher · Referenz {key[1]:.2f} s · {key[2]:.0f} s gewählt")
             return
         self.transport.stop()
         self._pending_key = key
         payload = dict(self.tracks[index])
         payload["target_time"] = key[1]
-        payload["sample_duration"] = 12.0
+        payload["sample_duration"] = key[2]
         self.status.setText(
             f"Referenzzeit {key[1]:.2f} s · die passende Quellposition wird anhand der Zeitkorrektur berechnet."
         )
         self.preview_requested.emit(payload)
 
     def preview_ready(self, path: str) -> bool:
-        """Cache at most four short WAV windows and play using native Qt audio."""
+        """Cache at most four bounded WAV windows and play using native Qt audio."""
         key = self._pending_key
         self._pending_key = None
         if key is None:
@@ -1347,6 +1357,7 @@ class MainWindow(QMainWindow):
         self.root_languages: dict[str, dict[str, str]] = {}
         self.track_overrides: dict[str, dict[str, Any]] = {}
         self.master_overrides: dict[str, str] = {}
+        self.manual_candidate_assignments: dict[str, str] = {}
         self.manual_segment_overrides: dict[tuple[str, str], dict[str, Any]] = {}
         self._track_override_timer = QTimer(self)
         self._track_override_timer.setSingleShot(True)
@@ -2211,10 +2222,59 @@ class MainWindow(QMainWindow):
             )
 
         def display(result):
-            dialog = EpisodeExplorerDialog(result, self)
-            dialog.exec()
+            dialog = EpisodeExplorerDialog(result, self, allow_assignment=True)
+            if dialog.exec() != QDialog.DialogCode.Accepted or dialog.selected_candidate is None:
+                return
+            try:
+                candidate = approved_candidate_path(
+                    result, dialog.selected_candidate, master=master, inspected_paths=paths)
+            except (OSError, ValueError) as exc:
+                QMessageBox.warning(self, "Zuordnung nicht übernommen", str(exc))
+                return
+            self._adopt_episode_candidate(candidate, master)
 
         self._run_task("Bildkandidaten prüfen (ohne Export)", inspect, display)
+
+    def _adopt_episode_candidate(self, candidate: str, verified_master: str):
+        """Attach an explicitly verified edition to this project, never to batch approval."""
+        group = self.selected_group
+        if (group is None or self.selected_master != verified_master
+                or verified_master not in group.files or self.worker is not None):
+            QMessageBox.warning(self, "Zuordnung nicht übernommen",
+                                "Die aktive Episode oder der Bildmaster hat sich geändert. Bitte erneut prüfen.")
+            return
+        if candidate in group.files:
+            QMessageBox.information(self, "Fassung bereits vorhanden", "Diese Datei ist der Episode bereits zugeordnet.")
+            return
+        previous = next((old for old in self.groups if candidate in old.files), None)
+        self.manual_candidate_assignments[candidate] = group.key
+        self.groups = apply_candidate_assignments(self.groups, self.manual_candidate_assignments)
+        # A candidate that came from a different group must never become a
+        # picture master simply because it happens to have a smaller file size.
+        self.master_overrides[group.key] = verified_master
+        if previous is not None and previous.key != group.key:
+            if self.master_overrides.get(previous.key) == candidate:
+                self.master_overrides.pop(previous.key, None)
+        for mapping in (self.alignments, self.automatic_alignments):
+            for pair in list(mapping):
+                if candidate in pair:
+                    mapping.pop(pair)
+        for row_index, current in enumerate(self.groups):
+            if current.key in {group.key, previous.key if previous else None}:
+                count_cell = self.episode_table.item(row_index, 1)
+                status_cell = self.episode_table.item(row_index, 3)
+                if count_cell:
+                    count_cell.setText(str(current.count))
+                if status_cell:
+                    status_cell.setText("Manuelle Zuordnung · Einzelexport" if current.key == group.key
+                                        else "Abgleich offen" if current.count > 1 else "Fassung fehlt")
+        self.episode_count.setText(
+            f"{len(self.groups)} Gruppen · {sum(item.count for item in self.groups)} Videodateien")
+        self._mark_project_dirty()
+        self._log(f"Manuell zugeordnet (Einzelexport nach neuer Prüfung): {Path(candidate).name} → {group.display_name}")
+        self._on_episode_selected()
+        self.statusBar().showMessage(
+            "Fassung dem Projekt zugeordnet · neue Analyse erforderlich · kein automatischer Stapelexport", 10000)
 
     def _focus_episode_search(self):
         self._navigate_to(0)
@@ -2999,6 +3059,7 @@ class MainWindow(QMainWindow):
             "performance": dict(self.performance_settings),
             "track_overrides": self.track_overrides,
             "master_overrides": self.master_overrides,
+            "manual_candidate_assignments": self.manual_candidate_assignments,
             "manual_segments": list(self.manual_segment_overrides.values()),
         }
 
@@ -3109,6 +3170,10 @@ class MainWindow(QMainWindow):
             self.performance_settings["cache_enabled"] = False
             self.track_overrides = dict(data.get("track_overrides", {}))
             self.master_overrides = dict(data.get("master_overrides", {}))
+            self.manual_candidate_assignments = {
+                str(Path(path).expanduser().resolve()): key
+                for path, key in data.get("manual_candidate_assignments", {}).items()
+            }
             self.manual_segment_overrides = {
                 (record["master"], record["source"]): record
                 for record in data.get("manual_segments", [])
@@ -3715,6 +3780,7 @@ class MainWindow(QMainWindow):
         )
 
     def _scan_done(self, groups):
+        groups = apply_candidate_assignments(groups, self.manual_candidate_assignments)
         self.groups = groups
         self.media_cache.clear()
         self.alignments.clear()
@@ -3736,7 +3802,9 @@ class MainWindow(QMainWindow):
                 if label and label != "UND":
                     languages.add(label)
             self.episode_table.setItem(row, 2, QTableWidgetItem(", ".join(sorted(languages)) if languages else "Zuordnung offen"))
-            status = "Abgleich offen" if len(group.files) > 1 else "Fassung fehlt"
+            status = ("Manuelle Zuordnung · Einzelexport"
+                      if group.key in self.manual_candidate_assignments.values()
+                      else "Abgleich offen" if len(group.files) > 1 else "Fassung fehlt")
             self.episode_table.setItem(row, 3, QTableWidgetItem(status))
         self.episode_search.clear()
         self.episode_filter.setCurrentIndex(0)
@@ -4281,7 +4349,7 @@ class MainWindow(QMainWindow):
         target_time = float(request.get("target_time", 0.0))
         scale = float(request.get("scale", 1.0))
         offset = float(request.get("offset", 0.0))
-        duration = max(3.0, min(15.0, float(request.get("sample_duration", 12.0))))
+        duration = max(3.0, min(60.0, float(request.get("sample_duration", 12.0))))
         if not path or stream_index < 0 or not (0.5 <= scale <= 2.0):
             QMessageBox.warning(self, "Ungültige Hörprobe", "Die ausgewählte Audiospur oder Zeitkorrektur ist ungültig.")
             return
@@ -4297,11 +4365,14 @@ class MainWindow(QMainWindow):
             source_time = piece.source_time_for_target(target_time)
             if source_time is None:
                 return
-            duration = min(duration, piece.source_end - source_time)
+            # Never play through an unverified cut or into another scene.
+            duration = min(duration, piece.target_end - target_time,
+                           piece.source_end - source_time)
         else:
             source_time = target_time if request.get("master") else (target_time - offset) / scale
         source_duration = float(request.get("duration", 0.0))
-        if source_time < 0 or source_time + 0.3 >= source_duration or duration < 0.3:
+        duration = min(duration, source_duration - source_time)
+        if source_time < 0 or duration < 0.3:
             QMessageBox.information(
                 self, "Keine Audioabdeckung",
                 f"Die Referenzzeit {target_time:.2f} s liegt für diese Spur außerhalb der verfügbaren Quellzeit (berechnet: {source_time:.2f} s). Wähle einen anderen Zeitpunkt."
@@ -4370,6 +4441,10 @@ class MainWindow(QMainWindow):
             dialog.play_button.setEnabled(not busy)
             dialog.master_button.setEnabled(not busy)
             dialog.source_button.setEnabled(not busy)
+            dialog.track_combo.setEnabled(not busy)
+            dialog.duration_combo.setEnabled(not busy)
+            dialog.position_combo.setEnabled(not busy)
+            dialog.time_spin.setEnabled(not busy and dialog.position_combo.currentData() is None)
             if message:
                 dialog.status.setText(message)
             if not busy:
@@ -4528,9 +4603,13 @@ class MainWindow(QMainWindow):
         if not self.groups:
             QMessageBox.information(self, "Keine Bibliothek", "Scanne zunächst mindestens einen Medienordner.")
             return
-        candidates = [group for group in self.groups if len(group.files) >= 2]
+        manually_assigned = set(self.manual_candidate_assignments.values())
+        candidates = [group for group in self.groups if len(group.files) >= 2
+                      and group.key not in manually_assigned]
         if not candidates:
-            QMessageBox.information(self, "Keine mehrsprachigen Gruppen", "Es wurden keine Episodengruppen mit mindestens zwei Dateien gefunden.")
+            QMessageBox.information(self, "Keine Stapelgruppen",
+                                    "Keine automatisch zugeordneten Episoden mit zwei Fassungen gefunden. "
+                                    "Manuell übernommene Fassungen werden nur einzeln nach frischer Bildprüfung exportiert.")
             return
         output_dir = self.output_dir_edit.text().strip()
         if not output_dir:
@@ -4582,6 +4661,7 @@ class MainWindow(QMainWindow):
             "Vorschau der Dateizuordnung:\n" + mapping_preview + "\n\n"
             "Nur zuverlässig ausgerichtete Gruppen werden exportiert. Episoden mit manuellen "
             "Schnittbereichen werden übersprungen und müssen einzeln bestätigt werden.\n\n"
+            f"Manuelle Kandidatenzuordnungen: {len(manually_assigned)} Gruppe(n) vom Stapel ausgeschlossen.\n\n"
             f"Beispiel-Ausgabe:\n{preview}\n\n"
             f"Ordnerstruktur: {'Serie / Staffel' if organize else 'ein Ausgabeordner'}\n"
             f"Tracknamen-Regeln: {len(root_rules)}\n"
@@ -4722,6 +4802,14 @@ class MainWindow(QMainWindow):
     def export_selected(self):
         if not self.selected_group or not self.selected_master:
             return
+        assigned_paths = {path for path, key in self.manual_candidate_assignments.items()
+                          if key == self.selected_group.key}
+        if self.selected_master in assigned_paths:
+            QMessageBox.warning(
+                self, "Bildmaster nach manueller Zuordnung gesperrt",
+                "Eine manuell zugeordnete Fremdfassung darf nicht als Bildmaster dienen. "
+                "Wähle das ursprünglich überprüfte Bildmaster-Video als Referenz.")
+            return
         rows = self._active_track_rows()
         if not rows:
             QMessageBox.information(self, "Keine zusätzlichen Audios", "Wähle mindestens eine zusätzliche Audiospur aus.")
@@ -4758,6 +4846,18 @@ class MainWindow(QMainWindow):
                 title=row.title_edit.text().strip() or Path(row.path).stem,
                 include=True, alignment=result,
             ))
+
+        unverified = [track for track in tracks if track.path in assigned_paths
+                      and not _is_independent_episodic_match(track.alignment)]
+        if unverified:
+            QMessageBox.warning(
+                self, "Unabhängiger Bildbeleg erforderlich",
+                "Mindestens eine manuell zugeordnete Fassung hat in der aktuellen Analyse "
+                "keinen ausreichenden episodenübergreifenden Bildbeleg:\n\n" +
+                "\n".join(f"• {Path(track.path).name}" for track in unverified) +
+                "\n\nEine frühere Kandidatenprüfung oder manuelle Zeitkorrektur kann diese "
+                "Sicherheitsgrenze nicht ersetzen. Kein Export gestartet.")
+            return
 
         low = [track for track in tracks if not track.alignment.safe_for_automatic_export]
         allow_low = False
@@ -4807,6 +4907,20 @@ class MainWindow(QMainWindow):
             if reply != QMessageBox.StandardButton.Yes:
                 return
             overwrite = True
+
+        try:
+            assessment = inspect_single_export(
+                self.selected_master, tracks, output,
+                overwrite=overwrite, allow_low_confidence=allow_low,
+                manually_assigned_paths=assigned_paths,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            QMessageBox.warning(self, "Export-Vorprüfung fehlgeschlagen",
+                                f"Die Dateizugriffe konnten nicht geprüft werden: {exc}")
+            return
+        preflight = ExportPreflightDialog(assessment, output, self)
+        if preflight.exec() != QDialog.DialogCode.Accepted:
+            return
 
         master = self.selected_master
         self._run_task(
