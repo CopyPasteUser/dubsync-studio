@@ -1,5 +1,21 @@
 # Unreleased · Headless workflow and resource safety (2026-11-09)
 
+- Native FFmpeg video-sampling filter now scales YUV frames to 32×32 before
+  grayscale conversion, avoiding full-resolution gray frame writes. On a
+  synthetic 1080p/H.264 30-second clip the sampling median changed from
+  0.588s to 0.466s (1.26×, four alternating runs); both full alignments kept
+  the same 60 visual anchors, safe decision, and exact slope/offset. Full
+  end-to-end timing had considerable run variance and was not proven 1.26×
+  faster. A new cache namespace excludes older FFmpeg filter hashes without
+  invalidating the explicit OpenCV-only cache; the hashes can differ slightly.
+- Added a read-only CPU FFmpeg thread benchmark for user hardware with exact
+  fingerprint parity, three alternating trials per candidate, and a ≥15%
+  speed threshold before suggesting a thread count. It refuses NAS media and
+  changes no settings. On a local synthetic 1080p 10-second prefix the default
+  was 0.355s and eight threads 0.239s (1.48×), with identical 13 samples;
+  physical host/codec testing remains necessary. Corrected the manual GPU
+  self-test wording to identify FFmpeg CPU as the ordinary automatic fallback.
+
 - Faster automatic visual sampling: when no GPU is demonstrably faster,
   use native FFmpeg CPU decoding and scale to 32×32 before frames reach Python;
   OpenCV remains the last-resort compatibility fallback. On a synthetic

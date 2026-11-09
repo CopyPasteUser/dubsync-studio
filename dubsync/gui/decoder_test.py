@@ -28,7 +28,7 @@ def summarize_decoder_selftest(measurements: dict, candidates: list) -> str:
                      f"matching frames {float(values.get('frame_match_ratio', 0)):.0%} · "
                      f"median distance {values.get('median_hamming_to_cpu', '?')}")
         lines.append(f"{candidate.key}: {state}")
-    lines += ["", "Recommended: " + (winner.key if winner else "CPU / OpenCV fallback"),
+    lines += ["", "Recommended: " + (winner.key if winner else "FFmpeg CPU (OpenCV if unavailable)"),
               "A GPU is selected only when faster and visually equivalent to CPU output.",
               "This verifies decoder output parity, not physical GPU utilization."]
     return "\n".join(lines)

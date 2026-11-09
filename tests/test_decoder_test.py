@@ -28,7 +28,7 @@ class DecoderSelfTestTests(unittest.TestCase):
                  self.amd.key: {"frames": 10, "samples_per_second": 11.,
                                 "frame_match_ratio": 1., "median_hamming_to_cpu": 0}}
         self.assertIsNone(choose_verified_decoder(bench, [self.intel, self.amd]))
-        self.assertIn("CPU / OpenCV fallback", summarize_decoder_selftest(bench, [self.intel, self.amd]))
+        self.assertIn("FFmpeg CPU (OpenCV if unavailable)", summarize_decoder_selftest(bench, [self.intel, self.amd]))
 
     def test_missing_cpu_reference_never_selects_gpu(self):
         bench = {self.intel.key: {"frames": 10, "samples_per_second": 50.,

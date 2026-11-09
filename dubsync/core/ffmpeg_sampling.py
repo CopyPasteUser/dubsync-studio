@@ -156,7 +156,10 @@ def _capture_command(path: str, interval: float, max_frames: int,
         command += ["-t", f"{limit_seconds:.3f}"]
     command += [
         "-vf", f"fps=fps=1/{interval:.9f}:start_time=0:round=near,"
-               "format=gray,scale=32:32:flags=area",
+               # Scale in native YUV before grayscale conversion. Converting
+               # each full-resolution frame to gray first wastes memory
+               # bandwidth on pixels that will immediately be discarded.
+               "scale=32:32:flags=area,format=gray",
         "-filter_threads", "1", "-frames:v", str(max_frames),
         "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1",
     ]

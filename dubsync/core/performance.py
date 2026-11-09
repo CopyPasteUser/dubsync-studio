@@ -435,7 +435,7 @@ def performance_diagnostics(settings: dict[str, Any] | None = None) -> str:
         "Automatic GPU candidates: " + (", ".join(c.key for c in gpu_decode_candidates()) or "none"),
         "AMD VAAPI render node: " + (vaapi_render_device("amd") or "not detected"),
         "Intel VAAPI render node: " + (vaapi_render_device("intel") or "not detected"),
-        "Auto compares up to four local GPU candidates against one CPU reference; only the fastest verified candidate may replace OpenCV.",
+        "Auto compares up to four local GPU candidates against one CPU reference; only the fastest verified candidate may replace FFmpeg CPU.",
         "Alignment-result cache: disabled (every episode is freshly validated)",
         f"Decoded frame-fingerprint cache: {'enabled' if cfg['frame_cache_enabled'] else 'disabled'}",
     ]
