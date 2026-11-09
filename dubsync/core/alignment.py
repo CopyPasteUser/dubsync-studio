@@ -25,6 +25,7 @@ from .ffmpeg_sampling import (SamplingBackendError, ffmpeg_sample,
                               choose_verified_decoder)
 from .frame_cache import FrameSampleCache, source_identity
 from .network import is_network_path
+from .native_match import native_pairs
 from .performance import sampling_worker_policy, system_specs
 
 Progress = Callable[[str, int, int], None]
@@ -482,11 +483,52 @@ def _sample_video_pair(source_path: str, target_path: str,
     return results["source"], results["master"]
 
 
+def _finalize_sequence(pairs: list[Anchor], n: int, m: int,
+                       diagnostic: AlignmentDiagnostic | None, backend: str) -> list[Anchor]:
+    """Shared output filtering and diagnostics for both matchers."""
+    clean: list[Anchor] = []
+    last_src = last_target = -1.0
+    for item in pairs:
+        if item.source_time <= last_src or item.target_time <= last_target:
+            continue
+        clean.append(item)
+        last_src, last_target = item.source_time, item.target_time
+    if diagnostic is not None:
+        histogram = {"0_5": 0, "6_10": 0, "11_15": 0, "16_18": 0}
+        for a in clean:
+            if a.hamming_distance <= 5:
+                histogram["0_5"] += 1
+            elif a.hamming_distance <= 10:
+                histogram["6_10"] += 1
+            elif a.hamming_distance <= 15:
+                histogram["11_15"] += 1
+            else:
+                histogram["16_18"] += 1
+        diagnostic.stage("sequence_match", backend=backend,
+                         source_sample_count=n, target_sample_count=m,
+                         matched_anchors=len(clean), coverage=round(len(clean) / max(1, min(n, m)), 5),
+                         hamming_histogram=histogram,
+                         first_source_time_s=round(clean[0].source_time, 4) if clean else None,
+                         last_source_time_s=round(clean[-1].source_time, 4) if clean else None)
+    return clean
+
+
 def _sequence_alignment(source: list[FrameSample], target: list[FrameSample],
                         progress: Progress | None = None, cancel_event=None,
                         diagnostic: AlignmentDiagnostic | None = None) -> list[Anchor]:
     """Monotone DP-Framezuordnung. Unpassende Szenen dürfen übersprungen werden."""
     n, m = len(source), len(target)
+    if cancel_event is not None and cancel_event.is_set():
+        raise AlignmentError("Frameabgleich abgebrochen.")
+    matches = native_pairs([item.phash for item in source], [item.phash for item in target])
+    if matches is not None:
+        if cancel_event is not None and cancel_event.is_set():
+            raise AlignmentError("Frameabgleich abgebrochen.")
+        if progress:
+            progress("Frameabgleich", n, n)
+        pairs = [Anchor(source[i].time, target[j].time,
+                        (source[i].phash ^ target[j].phash).bit_count()) for i, j in matches]
+        return _finalize_sequence(pairs, n, m, diagnostic, "rust")
     # 2.0 Sekunden sind teuer genug, dass falsche Paare zugunsten von Lücken vermieden werden.
     gap_cost = 0.205
     max_match_distance = 18
@@ -550,31 +592,7 @@ def _sequence_alignment(source: list[FrameSample], target: list[FrameSample],
             break
     pairs.reverse()
 
-    # Wiederholte zeitliche Paare sowie nicht-monotone Zuordnungen entfernen.
-    clean: list[Anchor] = []
-    last_src = last_target = -1.0
-    for item in pairs:
-        if item.source_time <= last_src or item.target_time <= last_target:
-            continue
-        clean.append(item)
-        last_src, last_target = item.source_time, item.target_time
-    if diagnostic is not None:
-        histogram = {"0_5": 0, "6_10": 0, "11_15": 0, "16_18": 0}
-        for a in clean:
-            if a.hamming_distance <= 5:
-                histogram["0_5"] += 1
-            elif a.hamming_distance <= 10:
-                histogram["6_10"] += 1
-            elif a.hamming_distance <= 15:
-                histogram["11_15"] += 1
-            else:
-                histogram["16_18"] += 1
-        diagnostic.stage("sequence_match", source_sample_count=n, target_sample_count=m,
-                         matched_anchors=len(clean), coverage=round(len(clean) / max(1, min(n, m)), 5),
-                         hamming_histogram=histogram,
-                         first_source_time_s=round(clean[0].source_time, 4) if clean else None,
-                         last_source_time_s=round(clean[-1].source_time, 4) if clean else None)
-    return clean
+    return _finalize_sequence(pairs, n, m, diagnostic, "numpy")
 
 
 def _feature_candidate_pairs(source: list[FrameSample], target: list[FrameSample],

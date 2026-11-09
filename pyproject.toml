@@ -40,4 +40,4 @@ test = ["tomli>=2.0; python_version < '3.11'", "pytest>=8.0,<9", "pytest-qt>=4.4
 include = ["dubsync*"]
 
 [tool.setuptools.package-data]
-dubsync = ["assets/*.svg"]
+dubsync = ["assets/*.svg", "_native/*.so", "_native/*.dylib", "_native/*.dll"]

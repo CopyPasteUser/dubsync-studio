@@ -12,7 +12,7 @@ scenes, and media libraries on local disks or NAS mounts.
 <sub>Concept artwork, not an application screenshot.</sub>
 
 **Current release:** `3.0.0b1` · **Status:** beta · **Platform:** Linux desktop ·
-**Stack:** Python / PySide6 / FFmpeg / OpenCV · **License:** MIT
+**Stack:** Python / PySide6 / FFmpeg / OpenCV / optional Rust · **License:** MIT
 
 ## A look inside
 
@@ -79,6 +79,20 @@ decodes, synchronizes or exports media, and grouping is **not** visual proof
 that two files contain the same episode. JSON scan output contains full local
 file paths, so keep it private. Queue status reports counts and recent progress,
 without source paths or stored failure logs; it does not start or resume jobs.
+
+### Optional Rust frame matcher
+
+The video-frame sequence matcher can run in a small Rust library while all
+media decoding, synchronization safety checks and the Qt interface remain
+unchanged. With Rust/Cargo installed, `./setup.sh` builds it automatically;
+the manual command is `./build-native.sh`. If it is absent or incompatible,
+DubSync uses the original NumPy matcher. Set `DUBSYNC_NATIVE=0` before launching
+to force NumPy for comparison. `--doctor` reports the active availability.
+The Rust build has no third-party crates or network runtime requirement.
+
+`./.venv/bin/python scripts/benchmark_native.py` runs a deterministic 1200-frame
+matcher-only speed comparison. A faster matcher does **not** imply the same
+end-to-end gain: video decoding, NAS reads and FFmpeg export remain separate costs.
 
 ## Workflow
 

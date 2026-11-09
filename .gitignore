@@ -14,3 +14,7 @@ htmlcov/
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm
+native/target/
+dubsync/_native/*.so
+dubsync/_native/*.dylib
+dubsync/_native/*.dll

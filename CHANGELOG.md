@@ -531,3 +531,13 @@ Native workspace redesign, centralized Qt theme, collapsible sources, honest pen
   pro-Video-CPU/GPU-Benchmarking und der sichere CPU-Fallback bleiben erhalten.
 - Dialog, Kurzprofile, Diagnosen, Nutzeranleitung und Regressionstests synchron
   angepasst. Physische Intel-/AMD-GPU- und NAS-Tests weiterhin ausstehend.
+# Unreleased · Optional Rust frame-matching engine (2026-11-09)
+
+- Zero-third-party-crate Rust core implements the monotone DP frame matcher
+  with two working rows and a compact traceback; only frame hash indices cross
+  the Python/Rust boundary. Existing Qt, FFmpeg and export gates are unchanged.
+- NumPy remains an automatic fallback, with an explicit `DUBSYNC_NATIVE=0`
+  override and backend diagnostics. Rust build is optional during setup.
+- Deterministic cross-backend parity tests for cuts, duplicate frames and 64-bit
+  hashes; a standalone matcher benchmark compares both implementations without
+  reading user media. Physical end-to-end speed and cancellation QA remain open.

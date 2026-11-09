@@ -154,7 +154,7 @@ for child in children:
         shutil.rmtree(child)
     else:
         child.unlink()
-ignore_names = {".git", ".venv", "__pycache__", ".pytest_cache", "build", "dist", ".mypy_cache"}
+ignore_names = {".git", ".venv", "__pycache__", ".pytest_cache", "build", "dist", ".mypy_cache", "target"}
 def ignore(_directory, names):
     return {name for name in names if name in ignore_names or name.endswith((".pyc", ".pyo", ".mkv", ".mp4", ".wav", ".sqlite3", ".sqlite3-wal", ".sqlite3-shm")) or name.startswith((".backup", ".finish-backup")) or ".bak." in name or name.endswith(".zip")}
 shutil.copytree(source, target, dirs_exist_ok=True, ignore=ignore)

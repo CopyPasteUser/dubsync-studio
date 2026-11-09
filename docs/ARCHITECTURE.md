@@ -13,6 +13,7 @@ DubSync Studio separates Qt presentation from media processing:
 - `dubsync/core/network.py`: Linux mount-table recognition for SMB/CIFS, NFS, SSHFS and GVFS sources.
 - `dubsync/core/fingerprint.py`: cached small-window BLAKE2 signatures for fast cache identity checks without full decode/full-file reads.
 - `dubsync/core/alignment.py`: frame sampling, perceptual hashes, monotonic sequence alignment, robust affine time fit, and confidence metrics.
+- `native/src/lib.rs` and `dubsync/core/native_match.py`: optional Rust implementation of the monotone frame dynamic-programming core, loaded through stdlib `ctypes`. A version-checked shared library is used when available; NumPy remains the fallback, with the same evidence and export gates.
 - `dubsync/core/piecewise.py`: independently validated monotone cut segments when one global affine map fails; unverified regions are never extrapolated as matching scenes.
 - `dubsync/core/ffmpeg_sampling.py`: bounded FFmpeg 32×32 grayscale frame extraction, optional hardware decode, per-file CPU/GPU speed and fingerprint comparison; always keeps a CPU fallback.
 - `dubsync/core/frame_cache.py`: bounded SQLite pHash/time sample cache, protected by fresh, distributed file-content/metadata checks; has no alignment/export decision state.
@@ -50,6 +51,15 @@ DubSync Studio separates Qt presentation from media processing:
 The default automatic mapper estimates one affine relationship per added track; it supports constant offsets and approximately uniform drift. If the monotone frame matcher also demonstrates clean offset discontinuities, a conservative piecewise mode can keep two to five independently proven segments. Each segment has its own affine map; unmatched master intervals are silent in the extra audio track and unmatched source intervals are skipped. Safety requires independent visual diversity, multiple trustworthy anchors per segment, monotonic source/master order, and bounded gaps/overall coverage. A manually edited offset/scale deliberately returns to the single-affine model and is no longer automatically exportable. The manual Qt segment editor can specify 1–12 chronologically monotone sections, mark them inactive and split them; this is a *structural* validation only, never independent visual proof. `manual_segments` forces an explicit single-track export confirmation, and the batch scheduler skips manually edited sources. Project files persist only manual section coordinates/active flags and both input file signatures, not assumed visual confidence; the original automatic alignment must be recomputed on reopen. Arbitrary edits, complex reordered scenes and large unverified regions are not claimed to be automatically repaired.
 
 The monotone frame matcher uses NumPy-vectorized Hamming distances and a prefix-minimum dynamic-programming recurrence. Its output is checked against the original scalar recurrence in regression tests. The speedup applies to frame matching only: decoding, filesystem throughput and audio processing have separate bottlenecks.
+
+When built, the Rust matcher evaluates the same f32-rounded recurrence with a
+two-row DP buffer and a compact backtrace (rather than materializing the full
+distance and cost matrices). Its output is checked against the NumPy path with
+independent random cuts, drift and duplicate-frame cases. Rust runs a bounded
+single native call (maximum 5000 samples per input); cancellation is checked
+on both sides of that call, while NumPy keeps per-row cooperative cancellation.
+The diagnostic identifies the selected backend. No previous match, safety
+decision or source file is cached or trusted because the native path is active.
 
 When the initial correspondence is unsafe, the alternative affine feature
 matcher considers the two strongest visual matches per source frame. It uses
