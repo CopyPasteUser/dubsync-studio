@@ -10,7 +10,8 @@
   the short speed/content probe but fails midstream now retries the identical
   FFmpeg CPU fingerprint pipeline before falling back to OpenCV. The automatic
   sample cache uses a new namespace so old OpenCV hashes cannot silently mix
-  with FFmpeg hashes; explicit decoder cache entries are preserved. GPU runtime
+  with FFmpeg hashes, and does not persist OpenCV fallback samples under an
+  FFmpeg decoder key; explicit decoder cache entries are preserved. GPU runtime
   speed remains unverified on physical hardware.
 
 - Faster local CPU video alignment on capable machines: the balanced preset

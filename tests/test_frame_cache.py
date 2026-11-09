@@ -11,6 +11,7 @@ from unittest import mock
 
 from dubsync.core.alignment import (AlignmentError, FrameSample,
                                     _sample_with_cache)
+from dubsync.core.alignment_diagnostics import AlignmentDiagnostic
 from dubsync.core.frame_cache import FrameSampleCache, source_identity
 
 
@@ -100,6 +101,21 @@ class FrameCacheTests(unittest.TestCase):
                                         None, "auto", None, FrameSampleCache(self.db))
             self.assertEqual(cached, updated)
             decode.assert_not_called()
+
+    def test_opencv_fallback_does_not_poison_auto_ffmpeg_cache(self):
+        cache = FrameSampleCache(self.db)
+        generated = [FrameSample(stamp, value) for stamp, value in self.samples]
+        diagnostic = AlignmentDiagnostic(str(self.file), str(self.file), 1., 100, "auto")
+
+        def fallback(*args, **_kwargs):
+            args[7].stage("sample_source", status="completed", backend="opencv")
+            return generated
+
+        with mock.patch("dubsync.core.alignment.sample_video", side_effect=fallback):
+            self.assertEqual(_sample_with_cache(str(self.file), 12, 1., None, "Quellvideo",
+                                                 None, "auto", diagnostic, cache), generated)
+        self.assertIsNone(cache.get(source_identity(str(self.file)), 12, 1., "auto-ffmpeg-v2"))
+        self.assertFalse(diagnostic.payload["stages"]["sample_cache_source"]["stored"])
 
     def test_cancellation_stops_cached_read(self):
         identity = source_identity(str(self.file))

@@ -354,7 +354,7 @@ def sample_video(path: str, duration: float, interval: float = 0.5,
         if diagnostic is not None:
             unique = len({item.phash for item in samples})
             diagnostic.stage(f"sample_{'source' if side == 'Quellvideo' else 'master'}",
-                             status=sampling_outcome,
+                             status=sampling_outcome, backend="opencv",
                              metadata_duration_s=round(duration, 4), interval_s=round(interval, 4),
                              capture_fps=round(fps, 4), capture_frame_count=frame_count,
                              frames_grabbed=frame_index, samples_collected=len(samples),
@@ -426,7 +426,12 @@ def _sample_with_cache(path: str, duration: float, interval: float,
             after = None
         if after is not None and after != identity:
             raise AlignmentError("Quelldatei während der Videoanalyse verändert; Analyse abgebrochen.")
-        stored = (after is not None and
+        # OpenCV and FFmpeg can produce different pHashes for the same image.
+        # If FFmpeg failed for this file, an OpenCV fallback must never be
+        # persisted under a decoder key that normally represents FFmpeg.
+        backend = (diagnostic.payload["stages"].get(f"sample_{stage}", {}).get("backend")
+                   if diagnostic is not None else None)
+        stored = (after is not None and backend != "opencv" and
                   cache.put(identity, duration, interval, [(x.time, x.phash) for x in samples],
                             cache_mode))
         if diagnostic is not None:
