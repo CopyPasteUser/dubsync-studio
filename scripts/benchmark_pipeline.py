@@ -2,7 +2,7 @@
 
 Uses a temporary synthetic test clip by default. Pass SOURCE MASTER to measure
 owned media without changing either input or persisting alignment diagnostics.
-The same selected Rust backend (if installed) is used for both variants.
+The same selected Rust matching backend (if installed) is used for both variants.
 """
 from __future__ import annotations
 

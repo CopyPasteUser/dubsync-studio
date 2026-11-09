@@ -26,7 +26,7 @@ from .ffmpeg_sampling import (SamplingBackendError, ffmpeg_sample,
 from .frame_cache import FrameSampleCache, source_identity
 from .network import is_network_path
 from .native_match import (native_feature_candidates, native_offset_candidates,
-                           native_pairs, native_phash_coefficients)
+                           native_pairs)
 from .performance import sampling_worker_policy, system_specs
 
 Progress = Callable[[str, int, int], None]
@@ -91,9 +91,6 @@ def perceptual_hash(frame: np.ndarray) -> int:
     tiny = gray if gray.shape == (32, 32) else cv2.resize(
         gray, (32, 32), interpolation=cv2.INTER_AREA)
     coeff = cv2.dct(np.float32(tiny))[:8, :8].flatten()
-    native = native_phash_coefficients(coeff)
-    if native is not None:
-        return native
     values = coeff[1:]  # ignore DC brightness
     # Exactly 63 elements: index 31 is the median. partition computes only the
     # order statistic instead of sorting, and packbits replaces 63 Python bit

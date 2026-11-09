@@ -47,8 +47,6 @@ def doctor_report() -> dict[str, Any]:
         native is not None and hasattr(native, "dubsync_feature_candidates"))
     result["hardware"]["rust_offset_candidates"] = (
         native is not None and hasattr(native, "dubsync_offset_candidates"))
-    result["hardware"]["rust_phash"] = (
-        native is not None and hasattr(native, "dubsync_phash_coefficients"))
     from dubsync.core.ffmpeg_sampling import (ffmpeg_hardware_accels, likely_gpu_accel,
                                               gpu_decode_candidates)
     result["hardware"]["ffmpeg_acceleration_interfaces"] = sorted(ffmpeg_hardware_accels())
@@ -388,7 +386,6 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  Rust-Frame-Abgleich: {'verfügbar' if hardware['rust_frame_matcher'] else 'NumPy-Fallback'}")
             print(f"  Rust-Szenenkandidaten: {'verfügbar' if hardware['rust_feature_candidates'] else 'NumPy-Fallback'}")
             print(f"  Rust-Intro-/Offset-Suche: {'verfügbar' if hardware['rust_offset_candidates'] else 'Python-Fallback'}")
-            print(f"  Rust-Frame-Fingerprints: {'verfügbar' if hardware['rust_phash'] else 'NumPy-Fallback'}")
             print("\nMedienwerkzeuge:")
             for name, info in report["media_tools"].items():
                 print(f"  {'OK' if info['available'] else 'FEHLT'}  {name}: {info.get('version', info.get('path', 'nicht gefunden'))}")

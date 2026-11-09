@@ -6,13 +6,11 @@ import threading
 import unittest
 from unittest.mock import patch
 
-import numpy as np
 
 from dubsync.core.alignment import (AlignmentError, FrameSample, _offset_probe_candidates,
                                    _feature_candidate_pairs, _sequence_alignment)
 from dubsync.core.native_match import (_library, native_feature_candidates,
-                                       native_offset_candidates, native_pairs,
-                                       native_phash_coefficients)
+                                       native_offset_candidates, native_pairs)
 
 
 def scalar_candidates(source, target):
@@ -30,31 +28,6 @@ class NativeBridgeCompatibilityTests(unittest.TestCase):
         with patch("dubsync.core.native_match._library", return_value=object()):
             self.assertIsNone(native_feature_candidates([0], [0]))
             self.assertIsNone(native_offset_candidates([0], [0], [True]))
-            self.assertIsNone(native_phash_coefficients(np.zeros(64, dtype=np.float32)))
-
-
-@unittest.skipUnless(_library() is not None and
-                     hasattr(_library(), "dubsync_phash_coefficients"),
-                     "Optional Rust pHash extension not built")
-class RustPhashTests(unittest.TestCase):
-    def test_native_packs_all_tie_cases_like_original_reference(self):
-        rng = np.random.default_rng(1411)
-        for case in range(90):
-            coeff = rng.normal(size=64).astype(np.float32)
-            if case % 3 == 0:
-                coeff[::4] = 0.0
-            values = coeff[1:]
-            median = np.median(values)
-            expected = sum(1 << bit for bit, value in enumerate(values) if value >= median)
-            with self.subTest(case=case):
-                self.assertEqual(native_phash_coefficients(coeff), expected)
-
-    def test_native_rejects_malformed_coefficients(self):
-        self.assertIsNone(native_phash_coefficients(np.zeros(63, dtype=np.float32)))
-        self.assertIsNone(native_phash_coefficients(np.zeros(64, dtype=np.float64)))
-        invalid = np.zeros(64, dtype=np.float32)
-        invalid[4] = np.nan
-        self.assertIsNone(native_phash_coefficients(invalid))
 
 
 @unittest.skipUnless(_library() is not None, "Optional Rust library not built")

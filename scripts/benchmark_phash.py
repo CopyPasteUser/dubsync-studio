@@ -16,7 +16,6 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from dubsync.core.alignment import perceptual_hash  # noqa: E402
-from dubsync.core.native_match import _library  # noqa: E402
 
 
 def original_phash(frame: np.ndarray) -> int:
@@ -59,17 +58,12 @@ def benchmark(frames: int = 2000, repetitions: int = 5) -> dict:
             if any(value != expected[i % len(expected)] for i, value in enumerate(hashes)):
                 raise RuntimeError("Optimierter pHash weicht von der vorherigen Berechnung ab.")
         timings[name] = statistics.median(measured)
-    library = _library()
-    rust = library is not None and hasattr(library, "dubsync_phash_coefficients")
     return {"scenario": "synthetic_32x32_gray", "frames": frames,
             "repetitions": repetitions, "hashes_identical": True,
-            "rust_phash_available": rust,
             "previous_seconds": round(timings["previous"], 5),
             "numpy_optimized_seconds": round(timings["numpy_optimized"], 5),
             "optimized_seconds": round(timings["optimized"], 5),
-            "speedup": round(timings["previous"] / timings["optimized"], 3),
-            "rust_over_numpy_speedup": (round(timings["numpy_optimized"] / timings["optimized"], 3)
-                                        if rust else None)}
+            "speedup": round(timings["previous"] / timings["optimized"], 3)}
 
 
 def main() -> int:

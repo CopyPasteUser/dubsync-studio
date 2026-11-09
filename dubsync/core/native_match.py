@@ -41,10 +41,6 @@ def _library():
                                     ctypes.POINTER(ctypes.c_uint8),
                                     ctypes.POINTER(ctypes.c_uint32), ctypes.c_size_t]
             offset_scan.restype = ctypes.c_ssize_t
-        phash_pack = getattr(lib, "dubsync_phash_coefficients", None)
-        if phash_pack is not None:
-            phash_pack.argtypes = [ctypes.POINTER(ctypes.c_float), ctypes.c_size_t]
-            phash_pack.restype = ctypes.c_uint64
         return lib
     except (AttributeError, OSError):
         return None
@@ -101,8 +97,6 @@ def native_feature_candidates(source_hashes: list[int], target_hashes: list[int]
         return None
     return [(int(output[3 * i]), int(output[3 * i + 1]), int(output[3 * i + 2]))
             for i in range(count)]
-
-
 def native_offset_candidates(source_hashes: list[int], target_hashes: list[int],
                              allowed_targets: list[bool]
                              ) -> list[tuple[int, int, int]] | None:
@@ -134,25 +128,3 @@ def native_offset_candidates(source_hashes: list[int], target_hashes: list[int],
         return None
     return [(int(output[3 * i]), int(output[3 * i + 1]), int(output[3 * i + 2]))
             for i in range(count)]
-
-
-def native_phash_coefficients(coefficients) -> int | None:
-    """Pack one contiguous 64-float32 DCT block using Rust, if available.
-
-    The OpenCV DCT and its input validation stay in Python. An older native
-    library simply uses the NumPy median/packbits implementation instead.
-    """
-    lib = _library()
-    pack = getattr(lib, "dubsync_phash_coefficients", None) if lib is not None else None
-    if pack is None:
-        return None
-    try:
-        if (coefficients.dtype.name != "float32" or coefficients.ndim != 1
-                or coefficients.size != 64 or not coefficients.flags.c_contiguous):
-            return None
-        # Cast the already-existing contiguous ndarray buffer; no copy.
-        pointer = ctypes.cast(coefficients.ctypes.data, ctypes.POINTER(ctypes.c_float))
-    except (AttributeError, TypeError, ValueError):
-        return None
-    result = int(pack(pointer, 64))
-    return None if result == 2**64 - 1 else result

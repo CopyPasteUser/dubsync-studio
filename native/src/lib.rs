@@ -8,38 +8,6 @@ pub extern "C" fn dubsync_native_abi() -> u32 {
     1
 }
 
-/// Pack a 32x32 frame's 8x8 DCT low-frequency block into the original 63-bit
-/// perceptual hash (DC excluded). u64::MAX is an impossible hash and signals
-/// invalid input. The DCT itself stays in optimized OpenCV native code.
-///
-/// # Safety
-/// `coefficients` must reference at least 64 readable contiguous f32 values
-/// when `length` is 64.
-#[no_mangle]
-pub unsafe extern "C" fn dubsync_phash_coefficients(
-    coefficients: *const f32,
-    length: usize,
-) -> u64 {
-    if coefficients.is_null() || length != 64 {
-        return u64::MAX;
-    }
-    let coefficients = std::slice::from_raw_parts(coefficients, 64);
-    if !coefficients.iter().all(|value| value.is_finite()) {
-        return u64::MAX;
-    }
-    let mut values = [0f32; 63];
-    values.copy_from_slice(&coefficients[1..]);
-    values.select_nth_unstable_by(31, |a, b| a.total_cmp(b));
-    let median = values[31];
-    let mut hash = 0u64;
-    for (bit, &value) in coefficients[1..].iter().enumerate() {
-        if value >= median {
-            hash |= 1u64 << bit;
-        }
-    }
-    hash
-}
-
 /// Write ascending `(source_index, target_index)` pairs into a u32 buffer.
 /// Returns pair count, or a negative value for invalid/bounded inputs.
 ///
@@ -246,28 +214,6 @@ pub unsafe extern "C" fn dubsync_offset_candidates(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn phash_preserves_median_and_little_endian_bit_positions() {
-        let mut coeff = [0f32; 64];
-        for (index, value) in coeff.iter_mut().enumerate() {
-            *value = index as f32;
-        }
-        assert_eq!(unsafe { dubsync_phash_coefficients(coeff.as_ptr(), 64) },
-                   ((1u64 << 63) - (1u64 << 31)));
-        let constant = [0f32; 64];
-        assert_eq!(unsafe { dubsync_phash_coefficients(constant.as_ptr(), 64) },
-                   u64::MAX >> 1);
-    }
-
-    #[test]
-    fn phash_rejects_invalid_buffers_and_nan_coefficients() {
-        let mut coeff = [0f32; 64];
-        assert_eq!(unsafe { dubsync_phash_coefficients(std::ptr::null(), 64) }, u64::MAX);
-        assert_eq!(unsafe { dubsync_phash_coefficients(coeff.as_ptr(), 63) }, u64::MAX);
-        coeff[1] = f32::NAN;
-        assert_eq!(unsafe { dubsync_phash_coefficients(coeff.as_ptr(), 64) }, u64::MAX);
-    }
 
     #[test]
     fn identical_frames_preserve_order() {
