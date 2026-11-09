@@ -110,6 +110,10 @@ the manual command is `./build-native.sh`. If it is absent or incompatible,
 DubSync uses the original NumPy matcher. Set `DUBSYNC_NATIVE=0` before launching
 to force NumPy for comparison. `--doctor` reports the active availability.
 The Rust build has no third-party crates or network runtime requirement.
+**Packaging note:** Universal Python wheels never bundle a platform-specific
+Rust `.so`/`.dylib`/`.dll` under the misleading `py3-none-any` tag. Wheel-only
+installations use the safe NumPy backend; source/desktop installations can build
+their native matcher with `./build-native.sh`. CI checks wheel contents.
 
 `./.venv/bin/python scripts/benchmark_native.py` runs a deterministic 1200-frame
 matcher-only speed comparison. A faster matcher does **not** imply the same

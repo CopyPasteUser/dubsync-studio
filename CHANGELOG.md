@@ -574,3 +574,12 @@ Native workspace redesign, centralized Qt theme, collapsible sources, honest pen
   export-decision parity; suggests parallel decoding only on matching evidence
   and at least 15% measured improvement. No automatic preferences or safety
   changes. Physical NAS, memory and long-load benchmarks remain outstanding.
+
+# Unreleased · Rust wheel portability guard (2026-11-09)
+
+- Fixed a packaging misclassification where a previously built Linux Rust
+  shared library could be bundled into a universal Python wheel. Native builds
+  remain available from source; standard wheels use the NumPy fallback.
+- CI now builds and inspects the actual wheel, rejecting host-specific binaries
+  inside `*-none-any` packages; regression tests cover valid/invalid tags and
+  the required application SVG.

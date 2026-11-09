@@ -39,5 +39,11 @@ test = ["tomli>=2.0; python_version < '3.11'", "pytest>=8.0,<9", "pytest-qt>=4.4
 [tool.setuptools.packages.find]
 include = ["dubsync*"]
 
+[tool.setuptools]
+# Optional platform-native binaries are built in source installations only.
+# Shipping a local Linux .so inside a py3-none-any wheel would mislabel it as
+# portable to Windows/macOS and other CPU architectures.
+include-package-data = false
+
 [tool.setuptools.package-data]
-dubsync = ["assets/*.svg", "_native/*.so", "_native/*.dylib", "_native/*.dll"]
+dubsync = ["assets/*.svg"]
