@@ -1,5 +1,13 @@
 # Unreleased · Headless workflow and resource safety (2026-11-09)
 
+- Accelerated the per-frame DCT perceptual hash without changing cached hash
+  bits: one 63-element order statistic replaces a general median, and bit
+  packing replaces a 63-iteration Python loop. FFmpeg's already-small 32x32
+  frames no longer get resized again. An optional Rust DCT-coefficient packer
+  accelerates this further when the native library is present; old native
+  builds use the verified NumPy path. Added exact scalar parity tests and
+  median-time frame and full FFmpeg-alignment benchmarks with real decode.
+
 - Added a third native Rust hot path: bounded six-best visual probing for
   long intro/outro offsets, preserving repeated-frame exclusions, distance
   thresholds and existing conservative episode-match gates. Python fallback
