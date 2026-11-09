@@ -70,11 +70,38 @@ In **Ausgabe-Ziel → Optionale Untertitelspur**, select a source and language:
 The resulting MKV has an **additional, non-default SRT text track**: enable it
 in Jellyfin, VLC or another player when needed. Existing subtitle streams remain
 intact, and the original video is copied bit-for-bit without a new video encode.
-DubSync intentionally does not retime subtitles from a different edition to
-match unpaired/edited scenes. Online results and machine transcriptions should
-be reviewed for timing and correctness before permanent archiving. Batch jobs
+DubSync can optionally repair a global subtitle offset or common framerate drift,
+but cannot guarantee a match across deleted, inserted or reordered scenes.
+Online results and machine transcriptions should be reviewed for timing and
+correctness before permanent archiving. Batch jobs
 remember their subtitle recipe; one manually picked file or pasted video URL
 cannot accidentally be applied to an entire season.
+
+## Optional automatic timing correction
+
+Install the lightweight optional synchronizer for downloaded SubDL, Subliminal
+or manually linked video captions:
+
+```bash
+./.venv/bin/python -m pip install -e '.[subtitle-sync]'
+```
+
+When available, [ffsubsync](https://github.com/smacke/ffsubsync) compares the
+picture master's speech-activity pattern with the candidate's SRT timestamps.
+For long episodes DubSync uses six short segments spread across the runtime,
+with at most two parallel workers; no full transcription or video re-encoding
+is required. The correction is limited to a 25-second search offset,
+20-second quality threshold and 3% maximum framerate deviation, and runs with
+ffsubsync's built-in low-confidence safeguard. DubSync validates the corrected
+SRT again and preserves the original candidate if correction fails. No media
+is uploaded. Existing local/embedded subtitles and freshly generated Whisper
+captions are not modified by this optional stage.
+
+Set `DUBSYNC_SUBTITLE_AUTO_SYNC=0` before launching DubSync to disable it.
+An absent synchronizer never blocks subtitle search or export. Clearly wrong
+SubDL episode filenames, invalid/unsorted timecodes and obvious short excerpts
+are rejected before embedding. This does **not** prove every online subtitle
+matches the exact cut; inspect the result in a player before archiving.
 
 ## Persistent subtitle cache
 

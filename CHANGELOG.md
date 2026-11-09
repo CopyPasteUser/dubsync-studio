@@ -1,5 +1,18 @@
 # Unreleased · Headless workflow and resource safety (2026-11-09)
 
+- Online subtitle quality pass: optional `ffsubsync>=0.5.1` can align SubDL,
+  Subliminal and manually linked video captions to the picture master's audio
+  using a bounded, conservative speech-activity comparison. Long references
+  use distributed audio segments; failed or implausible sync never overwrites
+  the original subtitle track. Offline provider/ASR fallback still works when
+  the optional synchronizer is absent or disabled.
+- Better release matching rejects contradictory season/episode tags in SubDL
+  release filenames. Normalized SRT timing checks reject backwards, unsorted
+  and malformed cue timestamps; obviously incomplete full-length online files
+  are retried rather than embedded. Provider rejection messages now retain the
+  last meaningful reason. Bumped subtitle-cache schema to distinguish results
+  processed with/without automatic timing correction.
+
 - Subtitle repeat exports and batch resumes now reuse previously validated
   SubDL, Subliminal or Whisper SRT tracks via a private, persistent disk cache.
   Cache keys include master file identity, sampled fingerprint, duration,
