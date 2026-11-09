@@ -1,5 +1,19 @@
 # Unreleased · Headless workflow and resource safety (2026-11-09)
 
+- Subtitle repeat exports and batch resumes now reuse previously validated
+  SubDL, Subliminal or Whisper SRT tracks via a private, persistent disk cache.
+  Cache keys include master file identity, sampled fingerprint, duration,
+  language, provider and selected ASR model. Local and embedded subtitle
+  discovery still runs before cache access; a changed local subtitle never
+  loses precedence to an older cached online one.
+- Online cached subtitles expire after 14 days, generated ones after 60 days.
+  The cache is bounded to 256 tracks / 128 MiB (5 MiB per item), checks
+  subtitle timing on every hit, rejects symlinks and invalid entries, and
+  writes atomically with private permissions. `DUBSYNC_SUBTITLE_CACHE=0` opts
+  out and `DUBSYNC_SUBTITLE_CACHE_DIR` changes the location.
+- Added offline cache tests for provider reuse, model/language/source changes,
+  corrupt/expired entries, local override, permissions and quota handling.
+
 - Optional, switchable SRT tracks in verified MKV exports, both for individual
   episodes and persistent batch jobs. Video and existing streams are copied;
   no subtitles are burned into the image and no video re-encoding is needed.

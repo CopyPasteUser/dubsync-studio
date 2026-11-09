@@ -25,6 +25,14 @@ class SubtitleSourceTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="dubsync-subtitle-test-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
+        # Keep repeatable tests independent of a developer's persistent cache.
+        environment = patch.dict(os.environ, {
+            "XDG_CACHE_HOME": str(self.root / "xdg-cache"),
+            "DUBSYNC_SUBTITLE_CACHE_DIR": str(self.root / "subtitle-cache"),
+            "DUBSYNC_SUBTITLE_CACHE": "1",
+        })
+        environment.start()
+        self.addCleanup(environment.stop)
         self.master = self.root / "Show.S01E02.mkv"
         self.master.write_bytes(b"not used by mocked converter")
         self.info = MediaInfo(str(self.master), 100.0, "matroska", 1,
