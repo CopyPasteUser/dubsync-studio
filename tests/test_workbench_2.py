@@ -55,6 +55,8 @@ class ReviewWorkbenchTests(unittest.TestCase):
         self.assertEqual(review_position(None, 50, 90)[0], 50)
         self.assertIn("nominell", review_position(None, 50, 90)[1].lower())
         self.assertIsNone(review_position(None, 100, 90)[0])
+        self.assertIn("Einzelposition nicht vollständig geprüft",
+                      review_position(self.result(), 15, 90)[1])
 
     def test_review_does_not_access_media_until_explicit_click(self):
         panel = StudioReviewPanel()
@@ -110,6 +112,24 @@ class ReviewWorkbenchTests(unittest.TestCase):
             self.assertEqual(panel.timeline.position, 36)
             self.assertEqual(panel.timeline.zoom, 4)
             self.assertIn("PRÜFUNG ERFORDERLICH", panel.quality_label.text())
+        finally:
+            panel.close()
+            panel.deleteLater()
+
+    def test_safe_evidence_verdict_still_requires_export_preflight(self):
+        panel = StudioReviewPanel()
+        try:
+            group = EpisodeGroup("episode", "E01", ["/offline/master.mkv", "/offline/source.mkv"])
+            media = {p: self.media(p) for p in group.files}
+            safe = self.result()
+            self.assertTrue(safe.safe_for_automatic_export)
+            panel.show_group(group, group.files[0], media,
+                             {(group.files[0], group.files[1]): safe})
+            self.assertEqual(panel.quality_label.property("state"), "safe")
+            self.assertIn("BILDABGLEICH BESTANDEN", panel.quality_label.text())
+            self.assertIn("Export wird vor dem Schreiben erneut geprüft", panel.quality_label.text())
+            self.assertIn("Bildproben", panel.evidence_summary_label.text())
+            self.assertIn("nicht dadurch verifiziert", panel.evidence_summary_label.toolTip())
         finally:
             panel.close()
             panel.deleteLater()

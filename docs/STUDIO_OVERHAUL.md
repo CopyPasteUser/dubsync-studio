@@ -47,7 +47,7 @@ real GPU usage, smooth audio on physical devices or reliable NAS recovery.
 - Tests: empty/populated/error transitions; keyboard-capable native button;
   narrow scroll and 1440×900 visibility checks.
 
-### Phase 2 · Episode-first Studio — onboarding and focused comparison implemented; remaining work open
+### Phase 2 · Episode-first Studio — onboarding, focus and evidence status implemented; remaining work open
 
 - Distinguish no sources, sources ready to scan, and active filters without
   results; expose one explicit next action in the episode list. This is
@@ -63,8 +63,13 @@ real GPU usage, smooth audio on physical devices or reliable NAS recovery.
   state when navigating between pages. Do not add automatic background work.
 - Continue refining the normal 980×680 three-pane hierarchy, including
   language tags, manually edited segments and large track counts.
-- Show what is *verified*, *provisional*, *unmapped* and *blocked* in text as
-  well as color, tied to the engine's current proof data.
+- Implemented: the monitor distinguishes image-sampled, unverified and unmapped
+  time in text (including the current cursor), shows their timeline percentages,
+  and explains automatic approval or withheld approval with engine-derived
+  reasons. These are **not** continuous visual verification or final export
+  authorization; the exporter remains authoritative.
+- Remaining: dense multi-track and manual-segment inspection at the minimum
+  desktop size, then physical-device QA before considering Phase 2 accepted.
 
 ### Phase 3 · Synchronized review feature consolidation
 

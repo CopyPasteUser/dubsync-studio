@@ -26,7 +26,7 @@ No billing, authentication or cloud CRUD is present.
 | Inline queue room | QueueControlRoom / QTableWidget | same BatchJobQueue SQLite `recent()`; original start/retry/drain callbacks | compact empty state with Studio navigation; bounded populated list; load failures remain visible; original dialog retained | tests/test_workbench_2.py; tests/test_studio_workspace.py |
 | Episode onboarding | MainWindow.library_empty_action / Studio viewport | existing source list and episode filter; scan remains explicit | no sources → choose folder; sources with no results yet → scan; filter miss → reset. 980×680 Studio scrolls above fixed job dock; 1440×900 avoids outer scroll | tests/test_studio_workspace.py |
 | Focused comparison | MainWindow.review_focus_button / QSplitter | current Studio widgets and saved Qt splitter state | `Alt+0` expands evidence pane; navigation preserves focus state; toggle restores side panes and their widths, never replaces editor state | tests/test_studio_workspace.py |
-| Visual review | StudioReviewPanel / AlignmentTimeline | live selected AlignmentResult and MediaInfo | anchor/segment plot; user-chosen source; explicit two-still loading | tests/test_workbench_2.py; real NAS pending |
+| Visual review | StudioReviewPanel / AlignmentTimeline | live selected AlignmentResult, `evidence_spans` and MediaInfo | chosen source; explicit two-still loading; sampled/unverified/unmapped zone percentages and cursor-specific text; approval reasons from `export_hold_reasons`; independent export preflight | tests/test_evidence.py; tests/test_workbench_2.py; real NAS pending |
 | Visual evidence | AlignmentTimeline / core/evidence.py | observed anchors plus immutable alignment mapping | sampled / unverified / unmapped; largest-gap navigation; no export mutation | tests/test_evidence.py |
 | Audio A/B | StudioReviewPanel / gui/audio_review.py | explicit 18 s FFmpeg excerpts | two independent waveforms; unmatched source remains empty | tests/test_audio_review.py |
 | Human-approved edition assignment | EpisodeExplorerDialog / MainWindow, core/episode_assignment.py | freshly evaluated independent interior visual evidence, project-local manual_candidate_assignments | explicit verified-row selection + checkbox; never batch; single export checks new independent alignment | tests/test_episode_assignment.py; tests/test_episode_explorer_gui.py |
@@ -50,6 +50,13 @@ No billing, authentication or cloud CRUD is present.
   continuous frame-by-frame inspection. Jumping to a gap does not modify a
   result. Waveform reads require a click and are bounded in duration, RAM and
   time; stale results are discarded when source/cursor changes.
+- Evidence status: the monitor names measured *image samples*, unverified
+  intervals and unmapped time separately; percentages describe timeline markers,
+  not engine coverage. The cursor label follows the current time and survives
+  refreshed alignment data. A passed automatic picture gate is labelled as a
+  picture check only, while the existing export preflight and exporter retain
+  independent authority. A failed automatic gate shows reasons and does not
+  imply all manually confirmed single exports are forbidden.
 - A/B listening: the reference-position A/B switch is always manual. The
   optional continuation checkbox preloads one following 60-second-or-shorter
   WAV while the current excerpt plays; prefetch must not interrupt playback.
