@@ -156,7 +156,10 @@ def sample_video(path: str, duration: float, interval: float = 0.5,
         selected_candidate = None
         gpu_device = None
         hinted = False
-        use_ffmpeg = mode != "auto"
+        # The FFmpeg CPU stream scales to 32x32 before crossing into Python;
+        # OpenCV's full-frame grab/retrieve path is the final compatibility
+        # fallback, not the normal CPU path for automatic mode.
+        use_ffmpeg = True
         try:
             if mode == "auto":
                 candidates = gpu_decode_candidates()
@@ -177,7 +180,7 @@ def sample_video(path: str, duration: float, interval: float = 0.5,
                     elif hinted:
                         _remember_gpu_candidate(video_codec, candidates, None)
                     elif progress:
-                        progress(f"{side}: Kein geprüfter GPU-Decoder schneller – OpenCV bleibt aktiv", 0, 0)
+                        progress(f"{side}: Kein geprüfter GPU-Decoder schneller – FFmpeg-CPU", 0, 0)
                 elif candidates and network_source and progress:
                     progress(f"{side}: NAS-Quelle – mehrfaches Einlesen für GPU-Benchmarks vermieden", 0, 0)
             else:
@@ -195,9 +198,30 @@ def sample_video(path: str, duration: float, interval: float = 0.5,
                     detail = (f"GPU {selected_candidate or selected_gpu.upper()} angefordert"
                               if selected_gpu else "CPU über FFmpeg")
                     progress(f"{side}: {detail} · Frames direkt auf 32×32 reduziert", 0, 0)
-                hashes = ffmpeg_sample(path, duration, interval, perceptual_hash,
-                                       accel=selected_gpu, device=gpu_device, cancel_event=cancel_event,
-                                       progress=progress, side=side, decode_threads=decode_threads)
+                try:
+                    hashes = ffmpeg_sample(path, duration, interval, perceptual_hash,
+                                           accel=selected_gpu, device=gpu_device, cancel_event=cancel_event,
+                                           progress=progress, side=side, decode_threads=decode_threads)
+                except SamplingBackendError as gpu_exc:
+                    if (mode != "auto" or selected_gpu is None or
+                            (cancel_event is not None and cancel_event.is_set())):
+                        raise
+                    # Some GPU drivers pass a short probe but fail later in
+                    # the full stream. Retry with the same 32x32 FFmpeg CPU
+                    # fingerprint pipeline before falling back to OpenCV.
+                    _remember_gpu_candidate(video_codec, candidates, None)
+                    if diagnostic is not None:
+                        diagnostic.stage("gpu_runtime_fallback", side=side,
+                                         failed_candidate=selected_candidate,
+                                         reason=str(gpu_exc)[:500], retry="ffmpeg_cpu")
+                    if progress:
+                        progress(f"{side}: GPU fehlgeschlagen – FFmpeg-CPU-Fallback", 0, 0)
+                    selected_gpu = None
+                    selected_candidate = None
+                    gpu_device = None
+                    hashes = ffmpeg_sample(path, duration, interval, perceptual_hash,
+                                           accel=None, device=None, cancel_event=cancel_event,
+                                           progress=progress, side=side, decode_threads=decode_threads)
                 samples = [FrameSample(timestamp, phash) for timestamp, phash in hashes]
                 if diagnostic is not None:
                     elapsed = time.monotonic() - ffmpeg_started
@@ -330,7 +354,7 @@ def sample_video(path: str, duration: float, interval: float = 0.5,
         if diagnostic is not None:
             unique = len({item.phash for item in samples})
             diagnostic.stage(f"sample_{'source' if side == 'Quellvideo' else 'master'}",
-                             status=sampling_outcome,
+                             status=sampling_outcome, backend="opencv",
                              metadata_duration_s=round(duration, 4), interval_s=round(interval, 4),
                              capture_fps=round(fps, 4), capture_frame_count=frame_count,
                              frames_grabbed=frame_index, samples_collected=len(samples),
@@ -361,11 +385,15 @@ def _sample_with_cache(path: str, duration: float, interval: float,
                        video_codec: str | None = None) -> list[FrameSample]:
     """Reuse only frame hashes; always rerun identity checks and alignment."""
     identity = None
+    # Previous automatic runs stored OpenCV fingerprints under "auto". FFmpeg
+    # CPU uses a different color conversion; never mix those old cached hashes
+    # with new automatic CPU/GPU streams during conservative Hamming matching.
+    cache_mode = "auto-ffmpeg-v2" if hardware_accel == "auto" else hardware_accel
     stage = "source" if side == "Quellvideo" else "master"
     if cache is not None:
         try:
             identity = source_identity(path)
-            cached = cache.get(identity, duration, interval, hardware_accel)
+            cached = cache.get(identity, duration, interval, cache_mode)
         except OSError:
             cached = None
         if cached is not None:
@@ -398,9 +426,16 @@ def _sample_with_cache(path: str, duration: float, interval: float,
             after = None
         if after is not None and after != identity:
             raise AlignmentError("Quelldatei während der Videoanalyse verändert; Analyse abgebrochen.")
-        stored = (after is not None and
+        # OpenCV and FFmpeg can produce different pHashes for the same image.
+        # If FFmpeg failed for this file, an OpenCV fallback must never be
+        # persisted under a decoder key that normally represents FFmpeg.
+        backend = (diagnostic.payload["stages"].get(f"sample_{stage}", {}).get("backend")
+                   if diagnostic is not None else None)
+        # Explicit "none" always uses OpenCV; its fingerprints remain valid
+        # across runs and should retain their normal cache hits.
+        stored = (after is not None and (backend != "opencv" or hardware_accel == "none") and
                   cache.put(identity, duration, interval, [(x.time, x.phash) for x in samples],
-                            hardware_accel))
+                            cache_mode))
         if diagnostic is not None:
             diagnostic.stage(f"sample_cache_{stage}", hit=False, stored=stored,
                              samples_collected=len(samples))

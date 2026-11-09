@@ -1,5 +1,19 @@
 # Unreleased · Headless workflow and resource safety (2026-11-09)
 
+- Faster automatic visual sampling: when no GPU is demonstrably faster,
+  use native FFmpeg CPU decoding and scale to 32×32 before frames reach Python;
+  OpenCV remains the last-resort compatibility fallback. On a synthetic
+  1080p/H.264 60-second pair, this reduced full alignment from 3.813s to
+  1.954s (1.95×) in one run; three alternating reruns measured median 3.948s
+  versus 2.271s (1.74×). Both produced the same 120-anchor conservative
+  decision. Results vary with hardware, codec and storage. A GPU that passes
+  the short speed/content probe but fails midstream now retries the identical
+  FFmpeg CPU fingerprint pipeline before falling back to OpenCV. The automatic
+  sample cache uses a new namespace so old OpenCV hashes cannot silently mix
+  with FFmpeg hashes, and does not persist OpenCV fallback samples under an
+  FFmpeg decoder key; explicit decoder cache entries are preserved. GPU runtime
+  speed remains unverified on physical hardware.
+
 - Faster local CPU video alignment on capable machines: the balanced preset
   now requests two independent FFmpeg decoders when at least four physical
   cores, four logical CPUs and 8 GiB RAM are available. The per-video NAS,
