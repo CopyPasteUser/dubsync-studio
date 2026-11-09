@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
+from itertools import count
 from pathlib import Path
 from unittest import mock
 
@@ -42,12 +43,29 @@ class FFmpegSamplingTests(unittest.TestCase):
         self.assertTrue(all(b[0] > a[0] for a, b in zip(samples, samples[1:])))
         self.assertGreater(len({value for _, value in samples}), 2)
 
+    def test_accurate_seek_matches_contiguous_cpu_frames(self):
+        from dubsync.core.alignment import perceptual_hash
+        full = ffmpeg_sample(str(self.path), 3., .5, perceptual_hash)
+        window = ffmpeg_sample(str(self.path), 3., .5, perceptual_hash,
+                               start_seconds=1., limit_seconds=2.)
+        self.assertEqual(window, [(i * .5, value) for i, (_, value) in enumerate(full[2:])])
+        with self.assertRaises(ValueError):
+            ffmpeg_sample(str(self.path), 3., .5, perceptual_hash, start_seconds=3.)
+
     def test_benchmark_cpu_provides_measured_rate(self):
         from dubsync.core.alignment import perceptual_hash
         results = benchmark_decoders(str(self.path), 3.0, 0.5,
                                      perceptual_hash, seconds=2.5)
         self.assertGreaterEqual(results["cpu"]["frames"], 4)
         self.assertGreater(results["cpu"]["samples_per_second"], 0)
+
+    def test_real_cpu_decoder_benchmarks_distributed_windows(self):
+        from dubsync.core.alignment import perceptual_hash
+        results = benchmark_decoder_candidates(str(self.path), 3., .2, perceptual_hash,
+                                               candidates=[], seconds=.8,
+                                               probe_starts=(0., 1., 2.))
+        self.assertEqual(results["cpu"]["probe_windows"], 3)
+        self.assertGreaterEqual(results["cpu"]["frames"], 12)
 
     def test_native_sampling_preserves_cpu_visual_identity(self):
         from dubsync.core.alignment import perceptual_hash, sample_video
@@ -152,6 +170,97 @@ class FFmpegSamplingTests(unittest.TestCase):
         self.assertEqual(ffmpeg.call_args.kwargs["device"], "/dev/dri/renderD128")
         self.assertEqual(ffmpeg.call_args.kwargs["accel"], "vaapi")
         self.assertEqual(bench.call_args.kwargs["candidates"], available)
+
+    def test_long_h264_uses_three_windows_only_on_local_files(self):
+        from dubsync.core.alignment import _GPU_HINTS, sample_video
+        _GPU_HINTS.clear()
+        self.addCleanup(_GPU_HINTS.clear)
+        candidate = DecoderCandidate("intel", "vaapi", "/dev/dri/renderD128")
+        speeds = {"cpu": {"frames": 30, "samples_per_second": 10},
+                  "intel": {"frames": 30, "samples_per_second": 20,
+                            "frame_match_ratio": 1., "median_hamming_to_cpu": 0,
+                            "worst_window_speed_ratio": 1.2}}
+        with (mock.patch("dubsync.core.alignment.gpu_decode_candidates", return_value=[candidate]),
+              mock.patch("dubsync.core.alignment.is_network_path", return_value=False),
+              mock.patch("dubsync.core.alignment.benchmark_decoder_candidates", return_value=speeds) as bench,
+              mock.patch("dubsync.core.alignment.ffmpeg_sample",
+                         return_value=[(i * .5, i) for i in range(12)])):
+            sample_video(str(self.path), 1800., .5, hardware_accel="auto", video_codec="h264")
+            self.assertEqual(bench.call_args.kwargs["probe_starts"], (0., 864., 1440.))
+            sample_video(str(self.path), 1800., .5, hardware_accel="auto", video_codec="hevc")
+            self.assertEqual(len(bench.call_args.kwargs["probe_starts"]), 3)
+            sample_video(str(self.path), 1800., .5, hardware_accel="auto", video_codec="vp9")
+            self.assertEqual(bench.call_args.kwargs["probe_starts"], (0.,))
+
+        with (mock.patch("dubsync.core.alignment.gpu_decode_candidates", return_value=[candidate]),
+              mock.patch("dubsync.core.alignment.is_network_path", return_value=True),
+              mock.patch("dubsync.core.alignment.benchmark_decoder_candidates") as bench,
+              mock.patch("dubsync.core.alignment.ffmpeg_sample",
+                         return_value=[(i * .5, i) for i in range(12)])):
+            sample_video(str(self.path), 1800., .5, hardware_accel="auto", video_codec="h264")
+            bench.assert_not_called()
+
+    def test_multisegment_benchmark_rejects_corrupt_middle_window(self):
+        from dubsync.core.ffmpeg_sampling import choose_verified_decoder
+        candidate = DecoderCandidate("cuda", "cuda")
+        seen = []
+
+        def sample(*_args, accel=None, start_seconds=0., **_kwargs):
+            seen.append((accel, start_seconds))
+            hashes = [index + int(start_seconds) for index in range(8)]
+            if accel == "cuda" and start_seconds == 480.:
+                hashes = [value ^ ((1 << 64) - 1) for value in hashes]
+            return [(index * .5, value) for index, value in enumerate(hashes)]
+
+        with (mock.patch("dubsync.core.ffmpeg_sampling.ffmpeg_sample", side_effect=sample),
+              mock.patch("dubsync.core.ffmpeg_sampling.time.monotonic", side_effect=count())):
+            results = benchmark_decoder_candidates("dummy.mkv", 1000., .5, lambda _: 0,
+                                                   candidates=[candidate], seconds=4.,
+                                                   probe_starts=(0., 480., 800.))
+
+        self.assertEqual(results["cpu"]["probe_windows"], 3)
+        self.assertIn("Bildparität", results["cuda"]["error"])
+        self.assertEqual(len(seen), 5)  # No reason to sample a third corrupt GPU window.
+        self.assertIsNone(choose_verified_decoder(results, [candidate]))
+
+    def test_multisegment_benchmark_rejects_slow_middle_window(self):
+        from dubsync.core.ffmpeg_sampling import choose_verified_decoder
+        candidate = DecoderCandidate("intel", "vaapi", "/dev/dri/renderD128")
+
+        def sample(*_args, **_kwargs):
+            return [(index * .5, index) for index in range(8)]
+
+        # CPU: 3 x 10s; GPU: 5s, 12s, 5s. Average GPU speed wins,
+        # but a sustained slow section must keep automatic decoding on CPU.
+        ticks = [0., 10., 10., 20., 20., 30., 30., 35., 35., 47., 47., 52.]
+        with (mock.patch("dubsync.core.ffmpeg_sampling.ffmpeg_sample", side_effect=sample),
+              mock.patch("dubsync.core.ffmpeg_sampling.time.monotonic", side_effect=ticks)):
+            results = benchmark_decoder_candidates("dummy.mkv", 1000., .5, lambda _: 0,
+                                                   candidates=[candidate], seconds=4.,
+                                                   probe_starts=(0., 480., 800.))
+
+        self.assertGreater(results["intel"]["samples_per_second"],
+                           results["cpu"]["samples_per_second"] * 1.15)
+        self.assertLess(results["intel"]["worst_window_speed_ratio"], .90)
+        self.assertIsNone(choose_verified_decoder(results, [candidate]))
+
+    def test_multisegment_benchmark_accepts_consistently_fast_gpu(self):
+        from dubsync.core.ffmpeg_sampling import choose_verified_decoder
+        candidate = DecoderCandidate("cuda", "cuda")
+
+        def sample(*_args, **_kwargs):
+            return [(index * .5, index) for index in range(8)]
+
+        ticks = [0., 10., 10., 20., 20., 30., 30., 35., 35., 40., 40., 45.]
+        with (mock.patch("dubsync.core.ffmpeg_sampling.ffmpeg_sample", side_effect=sample),
+              mock.patch("dubsync.core.ffmpeg_sampling.time.monotonic", side_effect=ticks)):
+            results = benchmark_decoder_candidates("dummy.mkv", 1000., .5, lambda _: 0,
+                                                   candidates=[candidate], seconds=4.,
+                                                   probe_starts=(0., 480., 800.))
+
+        self.assertEqual(results["cuda"]["probe_windows"], 3)
+        self.assertEqual(results["cuda"]["worst_window_speed_ratio"], 2.)
+        self.assertEqual(choose_verified_decoder(results, [candidate]), candidate)
 
     def test_codec_scoped_gpu_hint_still_rechecks_every_new_file(self):
         from dubsync.core.alignment import sample_video, _GPU_HINTS

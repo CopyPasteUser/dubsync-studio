@@ -167,10 +167,15 @@ def sample_video(path: str, duration: float, interval: float = 0.5,
                 network_source = is_network_path(path) if candidates and duration >= 45 else False
                 if candidates and duration >= 45 and not network_source:
                     measured_candidates, hinted = _gpu_candidates_for_codec(video_codec, candidates)
+                    probe_seconds = 6.0 if len(measured_candidates) > 1 else 8.0
+                    long_h26x = (duration >= 900 and
+                                 (video_codec or "").lower() in {"h264", "hevc", "h265"})
+                    probe_starts = ((0.0, duration * .48, duration * .80)
+                                    if long_h26x else (0.0,))
                     benchmark = benchmark_decoder_candidates(
                         path, duration, interval, perceptual_hash,
                         candidates=measured_candidates, cancel_event=cancel_event,
-                        seconds=6.0 if len(measured_candidates) > 1 else 8.0)
+                        seconds=probe_seconds, probe_starts=probe_starts)
                     winner = choose_verified_decoder(benchmark, measured_candidates)
                     if winner is not None:
                         selected_gpu, gpu_device = winner.accel, winner.device

@@ -1,5 +1,15 @@
 # Unreleased · Headless workflow and resource safety (2026-11-09)
 
+- Automatic GPU decoder selection now tests three distributed, accurately
+  seeked 6–8-second windows on local H.264/HEVC media of at least 15 minutes,
+  instead of relying only on the introduction. Every window must match CPU
+  fingerprints (at least 95% near-identical; median Hamming distance ≤10),
+  and no window may fall below 90% of CPU sampling throughput. The overall
+  GPU candidate still needs a ≥15% speed advantage. Shorter media and other
+  codecs retain the original single-window check; NAS paths still skip
+  additional GPU probes. Seek parity and bad/slow middle segments have new
+  regression coverage. Real Intel VAAPI/NVIDIA CUDA GPU timings remain open.
+
 - FFmpeg CPU-decoder threads now respect the current process's CPU affinity
   and cgroup quota, even if OpenCV or a user thread request reports more host
   CPUs. This prevents oversubscribing restricted Linux desktops/containers.

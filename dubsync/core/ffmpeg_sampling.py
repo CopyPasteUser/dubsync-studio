@@ -126,7 +126,8 @@ def gpu_decode_candidates() -> list[DecoderCandidate]:
 def _capture_command(path: str, interval: float, max_frames: int,
                      accel: str | None, limit_seconds: float | None,
                      device: str | None = None,
-                     decode_threads: int | None = None) -> list[str]:
+                     decode_threads: int | None = None,
+                     start_seconds: float = 0.0) -> list[str]:
     binary = shutil.which("ffmpeg")
     if binary is None:
         raise SamplingBackendError("FFmpeg ist nicht installiert.")
@@ -152,7 +153,10 @@ def _capture_command(path: str, interval: float, max_frames: int,
             threads = int(os.cpu_count() or 2)
     # Avoid decoding with the host's full CPU count inside a small cgroup or
     # affinity-restricted session, including explicit thread requests.
-    command += ["-threads", str(max(1, min(_cpu_count(), threads))), "-i", path]
+    command += ["-threads", str(max(1, min(_cpu_count(), threads)))]
+    if start_seconds:
+        command += ["-ss", f"{start_seconds:.3f}"]
+    command += ["-i", path]
     command += ["-map", "0:v:0", "-an", "-sn", "-dn"]
     if limit_seconds is not None:
         command += ["-t", f"{limit_seconds:.3f}"]
@@ -174,17 +178,20 @@ def ffmpeg_sample(path: str, duration: float, interval: float,
                   limit_seconds: float | None = None,
                   cancel_event=None, progress=None, side: str = "Video",
                   stall_timeout: float = 90.0,
-                  decode_threads: int | None = None) -> list[tuple[float, int]]:
-    """Return complete samples or raise; partial/broken GPU output is never used."""
+                  decode_threads: int | None = None,
+                  start_seconds: float = 0.0) -> list[tuple[float, int]]:
+    """Return complete samples or raise; seeked benchmark timestamps are window-relative."""
     import numpy as np
-    if interval <= 0 or duration <= 0 or not math.isfinite(interval) or not math.isfinite(duration):
+    if (interval <= 0 or duration <= 0 or not math.isfinite(interval) or not math.isfinite(duration)
+            or not math.isfinite(start_seconds) or not 0 <= start_seconds < duration):
         raise ValueError("Ungültige Laufzeit oder Sample-Abstand.")
     if cancel_event is not None and cancel_event.is_set():
         raise SamplingBackendError("Videoanalyse abgebrochen.")
-    effective_duration = min(duration, limit_seconds) if limit_seconds is not None else duration
+    remaining = duration - start_seconds
+    effective_duration = min(remaining, limit_seconds) if limit_seconds is not None else remaining
     max_frames = min(12000, max(4, int(math.ceil(effective_duration / interval)) + 2))
     command = _capture_command(path, interval, max_frames, accel, limit_seconds,
-                               device, decode_threads)
+                               device, decode_threads, start_seconds)
     collected: list[tuple[float, int]] = []
     chunks: queue.Queue[tuple[str, bytes | BaseException | None]] = queue.Queue(maxsize=12)
     stop_reader = threading.Event()
@@ -295,38 +302,69 @@ def benchmark_decoders(path: str, duration: float, interval: float,
 def benchmark_decoder_candidates(path: str, duration: float, interval: float,
                                  fingerprint: Callable[[np.ndarray], int], *,
                                  candidates: list[DecoderCandidate], cancel_event=None,
-                                 seconds: float = 8.0
+                                 seconds: float = 8.0,
+                                 probe_starts: tuple[float, ...] = (0.0,)
                                  ) -> dict[str, dict[str, float | int | str]]:
     """Compare CPU and every GPU on identical frames, without repeating CPU work.
 
-    Sequential measurements avoid two adapters fighting over the same memory
-    bandwidth. No GPU is accepted merely because FFmpeg listed an interface.
+    Sequential measurements avoid two adapters fighting over memory bandwidth.
+    For long videos, callers can require parity and useful speed in several
+    independent windows; an intro alone never establishes GPU suitability.
     """
+    if (not math.isfinite(seconds) or seconds <= 0 or not probe_starts or
+            any(not math.isfinite(start) or start < 0 or
+                start + min(seconds, duration) > duration + .001 for start in probe_starts)):
+        raise ValueError("Ungültige Decoder-Prüfabschnitte.")
     results: dict[str, dict[str, float | int | str]] = {}
-    cpu_frames: list[tuple[float, int]] | None = None
+    reference_windows: list[list[tuple[float, int]]] = []
     for candidate in [None, *candidates]:
         name = candidate.key if candidate is not None else "cpu"
-        started = time.monotonic()
+        if candidate is not None and len(reference_windows) != len(probe_starts):
+            results[name] = {"error": "CPU-Referenz unvollständig."}
+            continue
         try:
-            frames = ffmpeg_sample(path, duration, interval, fingerprint,
-                                   accel=candidate.accel if candidate else None,
-                                   device=candidate.device if candidate else None,
-                                   limit_seconds=min(seconds, duration),
-                                   cancel_event=cancel_event,
-                                   stall_timeout=15.0)
-            elapsed = max(0.001, time.monotonic() - started)
-            results[name] = {"frames": len(frames), "seconds": round(elapsed, 3),
-                             "samples_per_second": round(len(frames) / elapsed, 2)}
+            elapsed = 0.0
+            count = 0
+            window_speeds = []
+            distances = []
+            matched = 0
+            for index, start in enumerate(probe_starts):
+                started = time.monotonic()
+                frames = ffmpeg_sample(path, duration, interval, fingerprint,
+                                       accel=candidate.accel if candidate else None,
+                                       device=candidate.device if candidate else None,
+                                       start_seconds=start, limit_seconds=min(seconds, duration - start),
+                                       cancel_event=cancel_event, stall_timeout=15.0)
+                window_elapsed = max(0.001, time.monotonic() - started)
+                elapsed += window_elapsed
+                count += len(frames)
+                if len(frames) < 4:
+                    raise SamplingBackendError("Zu wenige Bilder für den Decodervergleich.")
+                if candidate is None:
+                    reference_windows.append(frames)
+                    window_speeds.append(len(frames) / window_elapsed)
+                else:
+                    reference = reference_windows[index]
+                    limit = min(len(reference), len(frames))
+                    differences = [(reference[i][1] ^ frames[i][1]).bit_count()
+                                   for i in range(limit)]
+                    if (abs(len(reference) - len(frames)) > 1 or
+                            sum(value <= 16 for value in differences) / max(len(reference), len(frames)) < .95 or
+                            (sorted(differences)[limit // 2] if limit else 99) > 10):
+                        raise SamplingBackendError("GPU-Bildparität in einem Prüfabschnitt unzureichend.")
+                    matched += sum(value <= 16 for value in differences)
+                    distances.extend(differences)
+                    window_speeds.append(len(frames) / window_elapsed)
+            results[name] = {"frames": count, "seconds": round(elapsed, 3),
+                             "samples_per_second": round(count / elapsed, 2),
+                             "probe_windows": len(probe_starts)}
             if candidate is None:
-                cpu_frames = frames
-            elif cpu_frames is not None:
-                count = min(len(cpu_frames), len(frames))
-                if count:
-                    distances = [(cpu_frames[i][1] ^ frames[i][1]).bit_count()
-                                 for i in range(count)]
-                    results[name]["frame_match_ratio"] = round(
-                        sum(value <= 16 for value in distances) / max(len(cpu_frames), len(frames)), 3)
-                    results[name]["median_hamming_to_cpu"] = int(sorted(distances)[count // 2])
+                reference_speeds = window_speeds
+            else:
+                results[name]["frame_match_ratio"] = round(matched / max(count, sum(map(len, reference_windows))), 3)
+                results[name]["median_hamming_to_cpu"] = int(sorted(distances)[len(distances) // 2])
+                results[name]["worst_window_speed_ratio"] = round(
+                    min(speed / reference for speed, reference in zip(window_speeds, reference_speeds)), 3)
         except SamplingBackendError as exc:
             if cancel_event is not None and cancel_event.is_set():
                 raise
@@ -353,6 +391,7 @@ def choose_verified_decoder(measurements: dict, candidates: list[DecoderCandidat
                 float(result.get("frame_match_ratio", 0)) >= .95 and
                 int(result.get("median_hamming_to_cpu", 99)) <= 10 and
                 int(result.get("frames", 0)) >= 4 and
+                float(result.get("worst_window_speed_ratio", 1.0)) >= .90 and
                 abs(int(result["frames"]) - int(cpu["frames"])) <= 1):
             accepted.append((speed, candidate))
     return max(accepted, key=lambda item: item[0])[1] if accepted else None

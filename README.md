@@ -41,8 +41,10 @@ They do not demonstrate a completed export or measured GPU performance.</sub>
   and explicit resume/retry.
 - **Hardware-aware performance:** Light / Balanced / Maximum resource presets;
   Intel iGPU, AMD and NVIDIA decoder candidates are measured against a CPU
-  reference on local videos. Unsupported, inaccurate or slower candidates fall
-  back to CPU. A manual decoder self-test is available under System Diagnostics.
+  reference on local videos. Long H.264/H.265 videos are checked at three
+  separate points, including the middle and later scenes; an inaccurate or
+  notably slower segment keeps CPU decoding. NAS media skip these extra
+  reads. A manual decoder self-test is available under System Diagnostics.
 
 ## Get started
 
