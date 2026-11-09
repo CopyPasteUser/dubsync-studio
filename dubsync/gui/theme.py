@@ -52,6 +52,7 @@ def studio_stylesheet(high_contrast: bool = False) -> str:
     QPushButton#navButton { background: transparent; border-color: transparent; color: $muted; }
     QPushButton#navButton:hover { background: $raised; color: $text; }
     QPushButton#navButton:checked { background: $selection; color: $text; border-bottom: 2px solid $accent; }
+    QPushButton#viewToggleButton:checked { background: $selection; color: $accent; border-color: $accent; }
     QPushButton#cancelButton:enabled { color: $danger; border-color: $danger; background: transparent; }
     QPushButton#cancelButton:enabled:hover { background: $raised; }
     QPushButton:disabled, QPushButton#primaryButton:disabled, QPushButton#secondaryButton:disabled, QToolButton:disabled { background: $surface; color: $disabled; border-color: $border; }

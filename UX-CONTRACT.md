@@ -25,6 +25,7 @@ No billing, authentication or cloud CRUD is present.
 | Durable batch queue | BatchQueueDialog / QTableWidget | core/job_queue.py SQLite entries; core/batch_diagnostics.py proof | explicit start/restart/retry/drain; no implicit startup | tests/test_job_queue.py; tests/test_gui_smoke.py |
 | Inline queue room | QueueControlRoom / QTableWidget | same BatchJobQueue SQLite `recent()`; original start/retry/drain callbacks | compact empty state with Studio navigation; bounded populated list; load failures remain visible; original dialog retained | tests/test_workbench_2.py; tests/test_studio_workspace.py |
 | Episode onboarding | MainWindow.library_empty_action / Studio viewport | existing source list and episode filter; scan remains explicit | no sources → choose folder; sources with no results yet → scan; filter miss → reset. 980×680 Studio scrolls above fixed job dock; 1440×900 avoids outer scroll | tests/test_studio_workspace.py |
+| Focused comparison | MainWindow.review_focus_button / QSplitter | current Studio widgets and saved Qt splitter state | `Alt+0` expands evidence pane; navigation preserves focus state; toggle restores side panes and their widths, never replaces editor state | tests/test_studio_workspace.py |
 | Visual review | StudioReviewPanel / AlignmentTimeline | live selected AlignmentResult and MediaInfo | anchor/segment plot; user-chosen source; explicit two-still loading | tests/test_workbench_2.py; real NAS pending |
 | Visual evidence | AlignmentTimeline / core/evidence.py | observed anchors plus immutable alignment mapping | sampled / unverified / unmapped; largest-gap navigation; no export mutation | tests/test_evidence.py |
 | Audio A/B | StudioReviewPanel / gui/audio_review.py | explicit 18 s FFmpeg excerpts | two independent waveforms; unmatched source remains empty | tests/test_audio_review.py |
@@ -70,6 +71,11 @@ No billing, authentication or cloud CRUD is present.
   scanning requires an explicit press. A filter miss cannot delete results;
   its reset button only clears search/filter. The episode work area can scroll
   on short viewports without moving the persistent processing dock.
+- Focused Studio comparison is a reversible presentation-only toggle: hiding
+  the episode list and track inspector preserves their widgets, edits, selection
+  and unsaved-change state. Their previous splitter geometry returns when the
+  user exits focus mode. Full episode titles and audio track names remain
+  available via tooltips; source paths can be selected for copying.
 - Analyse/export: existing QThread → progress dock → existing completion/error reports.
   Duplicate tasks and profile changes are disabled during processing. Pause remains
   cooperative and cancel releases pause. No new domain transitions introduced.

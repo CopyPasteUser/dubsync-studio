@@ -55,7 +55,9 @@ DejaVu Sans Mono for the activity log. Body 13px. No web fonts or font downloads
 ## Layout
 Horizontal workspace navigation. Source list can collapse after scanning;
 episodes, the visual Abgleich-Monitor and the track inspector share a resizable
-three-pane splitter. Each owns its scroll. The center monitor has "Zeitachse",
+three-pane splitter. Each owns its scroll. `Alt+0` expands the evidence monitor
+by temporarily hiding the side panes, then restores splitter geometry and
+uncommitted edits. The center monitor has "Zeitachse",
 "Framevergleich" and "Audio-A/B" tabs so evidence, images and short waveforms remain usable in a
 compact viewport. At heights below 950px the redundant Studio heading and
 brand subtitle hide.

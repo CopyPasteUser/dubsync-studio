@@ -47,17 +47,22 @@ real GPU usage, smooth audio on physical devices or reliable NAS recovery.
 - Tests: empty/populated/error transitions; keyboard-capable native button;
   narrow scroll and 1440×900 visibility checks.
 
-### Phase 2 · Episode-first Studio — onboarding states implemented; remaining work open
+### Phase 2 · Episode-first Studio — onboarding and focused comparison implemented; remaining work open
 
 - Distinguish no sources, sources ready to scan, and active filters without
   results; expose one explicit next action in the episode list. This is
   implemented and covered by native Qt state-transition tests.
 - The 980×680 Studio work surface scrolls independently of the persistent job
   dock, while 1440×900 remains unscrolled; a compact first action stays visible.
+- **Vergleich vergrößern** (`Alt+0`) temporarily hides the episode list and track
+  inspector so the evidence monitor can use the full work area. Switching to
+  Batch/Activity and back retains focus mode; leaving it restores the original
+  splitter sizes and all in-memory edits. Full episode and audio-track labels
+  remain accessible via native tooltips; source paths are selectable.
 - Keep selection, evidence cursor, track configuration, and unsaved project
   state when navigating between pages. Do not add automatic background work.
-- Improve the 980×680 three-pane hierarchy and splitters, including long
-  filenames, language tags, manually edited segments and large track counts.
+- Continue refining the normal 980×680 three-pane hierarchy, including
+  language tags, manually edited segments and large track counts.
 - Show what is *verified*, *provisional*, *unmapped* and *blocked* in text as
   well as color, tied to the engine's current proof data.
 
