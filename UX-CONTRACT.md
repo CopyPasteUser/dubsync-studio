@@ -28,7 +28,7 @@ No billing, authentication or cloud CRUD is present.
 | Visual evidence | AlignmentTimeline / core/evidence.py | observed anchors plus immutable alignment mapping | sampled / unverified / unmapped; largest-gap navigation; no export mutation | tests/test_evidence.py |
 | Audio A/B | StudioReviewPanel / gui/audio_review.py | explicit 18 s FFmpeg excerpts | two independent waveforms; unmatched source remains empty | tests/test_audio_review.py |
 | Human-approved edition assignment | EpisodeExplorerDialog / MainWindow, core/episode_assignment.py | freshly evaluated independent interior visual evidence, project-local manual_candidate_assignments | explicit verified-row selection + checkbox; never batch; single export checks new independent alignment | tests/test_episode_assignment.py; tests/test_episode_explorer_gui.py |
-| Longer A/B playback | SyncPreviewDialog / AudioPreviewTransport | bounded private FFmpeg WAV excerpts | user-selected 12/30/60 s, clipped to source/segment; four LRU previews; no auto-next | tests/test_audio_ab_transport.py |
+| Longer A/B playback | SyncPreviewDialog / AudioPreviewTransport / core/audio_audition.py | bounded private FFmpeg WAV excerpts, verified segment-local slope | user-selected 12/30/60 s; optional prefetch and auto-next only within confirmed source/reference bounds; manual Stop cancels continuation; four LRU previews; no gapless claim | tests/test_audio_ab_transport.py |
 | Single export preflight | ExportPreflightDialog / core/export_preflight.py | current selected master, tracks, destination, visual evidence | native table with ready/caution/blocked; blocked disables action; exporter remains final authority | tests/test_export_preflight_gui.py |
 | GPU self-test | gui/decoder_test.py / core/ffmpeg_sampling.py | measured CPU/GPU frame parity and throughput | explicit local file, read-only worker, cancel | tests/test_decoder_test.py |
 
@@ -48,6 +48,14 @@ No billing, authentication or cloud CRUD is present.
   continuous frame-by-frame inspection. Jumping to a gap does not modify a
   result. Waveform reads require a click and are bounded in duration, RAM and
   time; stale results are discarded when source/cursor changes.
+- A/B listening: the reference-position A/B switch is always manual. The
+  optional continuation checkbox preloads one following 60-second-or-shorter
+  WAV while the current excerpt plays; prefetch must not interrupt playback.
+  End-of-media waits for a slow prefetch, or stops where source, reference or
+  confirmed cut coverage ends. Manual Stop prevents auto-resume. A different
+  track or reference point resets the sequence. Media extraction and four-file
+  private LRU cache remain bounded, cancellable, and unrelated to export proof.
+  An external player handles standalone excerpts only, not automatic playback.
 - Inline batch control: reading the queue never executes it. Start and retry
   use the same verified core actions/authorization as the legacy queue dialog;
   automatic drain processes queued entries only. Real progress is refreshed

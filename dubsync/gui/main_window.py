@@ -39,6 +39,7 @@ from dubsync.gui.queue_room import QueueControlRoom
 from dubsync.gui.autotune import CpuAutotuneDialog
 
 from dubsync.core.alignment import AlignmentError, align_videos
+from dubsync.core.audio_audition import plan_audition_window
 from dubsync.core.batch import (output_path_for_group, choose_smallest_video, estimate_output_size_bytes,
                                 _is_independent_episodic_match)
 from dubsync.core.cache import AlignmentCache
@@ -609,7 +610,7 @@ class AlignmentResidualPlot(QWidget):
 
 
 class SyncPreviewDialog(QDialog):
-    """Inspect bounded target-aligned A/B excerpts, including longer audition windows."""
+    """Inspect bounded target-aligned A/B excerpts and optionally prefetch the next."""
     preview_requested = Signal(object)
 
     def __init__(self, tracks: list[dict[str, Any]], duration: float, parent=None):
@@ -620,7 +621,13 @@ class SyncPreviewDialog(QDialog):
         self.tracks = tracks
         self.duration = max(0.1, float(duration))
         self._cache: OrderedDict[tuple[int, float, float], str] = OrderedDict()
+        self._cache_duration: dict[tuple[int, float, float], float] = {}
         self._pending_key: tuple[int, float, float] | None = None
+        self._pending_prefetch = False
+        self._active_key: tuple[int, float, float] | None = None
+        self._next_key: tuple[int, float, float] | None = None
+        self._waiting_for_next = False
+        self._user_stopped = False
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
         intro = QLabel(
@@ -655,6 +662,13 @@ class SyncPreviewDialog(QDialog):
             self.duration_combo.addItem(label, seconds)
         self.duration_combo.setAccessibleName("Länge des Audiovergleichs")
         form.addRow("Hörprobenlänge", self.duration_combo)
+        self.continuous_checkbox = QCheckBox("Nächsten Abschnitt automatisch vorladen und abspielen")
+        self.continuous_checkbox.setToolTip(
+            "Nur bestätigte Audioabdeckung; zwischen WAV-Fenstern kann eine kurze Pause entstehen."
+        )
+        self.continuous_checkbox.setAccessibleName("Fortlaufende Hörprobe einschalten")
+        self.continuous_checkbox.setChecked(False)
+        form.addRow("Fortsetzung", self.continuous_checkbox)
         layout.addLayout(form)
         self.status = QLabel("Hörprobe wählen · maximal 60 Sekunden pro Fassung, ohne Dateiveränderung.")
         self.status.setWordWrap(True)
@@ -672,7 +686,11 @@ class SyncPreviewDialog(QDialog):
         layout.addLayout(switch_row)
         self.transport = AudioPreviewTransport(self)
         layout.addWidget(self.transport)
+        self.transport.nearing_end.connect(self._queue_next)
+        self.transport.clip_ended.connect(self._clip_ended)
+        self.transport.stopped_by_user.connect(self._user_stop)
         if not self.transport.available:
+            self.continuous_checkbox.setEnabled(False)
             self.status.setText("In-App-Audio nicht verfügbar; Hörproben öffnen sich im externen Player.")
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.button(QDialogButtonBox.StandardButton.Close).setText("Schließen")
@@ -712,10 +730,13 @@ class SyncPreviewDialog(QDialog):
         if index < 0 or index >= len(self.tracks):
             return
         key = (index, round(self.time_spin.value(), 2), float(self.duration_combo.currentData()))
+        self._user_stopped = False
+        self._next_key = None
+        self._waiting_for_next = False
+        self._active_key = None
+        self._pending_prefetch = False
         cached = self._cache.get(key)
-        if cached and Path(cached).is_file() and self.transport.play_clip(cached):
-            self._cache.move_to_end(key)
-            self.status.setText(f"A/B-Fassung aus privatem Zwischenspeicher · Referenz {key[1]:.2f} s · {key[2]:.0f} s gewählt")
+        if cached and Path(cached).is_file() and self._play_cached(key):
             return
         self.transport.stop()
         self._pending_key = key
@@ -727,23 +748,101 @@ class SyncPreviewDialog(QDialog):
         )
         self.preview_requested.emit(payload)
 
-    def preview_ready(self, path: str) -> bool:
-        """Cache at most four bounded WAV windows and play using native Qt audio."""
+    def _play_cached(self, key: tuple[int, float, float]) -> bool:
+        path = self._cache.get(key)
+        if not path or not Path(path).is_file() or not self.transport.play_clip(path):
+            return False
+        self._cache.move_to_end(key)
+        self._active_key = key
+        self._next_key = None
+        self._waiting_for_next = False
+        self.status.setText(
+            f"A/B-Hörprobe · Referenz {key[1]:.2f} s · "
+            f"{self._cache_duration.get(key, key[2]):.1f} s Audio"
+        )
+        return True
+
+    def _queue_next(self):
+        """Prefetch one *verified* next window, without interrupting playback."""
+        if (not self.continuous_checkbox.isChecked() or self._user_stopped
+                or self._active_key is None or self._next_key is not None
+                or self._pending_key is not None or not self.transport.available):
+            return
+        index, start, requested = self._active_key
+        track = self.tracks[index]
+        current = plan_audition_window(track, start, self._cache_duration.get(self._active_key, requested))
+        if current is None:
+            self.status.setText("Fortsetzung nicht möglich: Audioabdeckung fehlt.")
+            return
+        next_time = round(start + current[1] * current[2], 2)
+        if next_time >= self.duration - 0.3 or next_time <= start + 0.2:
+            self.status.setText("Hörprobe endet am Ende der Referenz-Timeline.")
+            return
+        if plan_audition_window(track, next_time, requested) is None:
+            self.status.setText("Hörprobe endet an einem unbestätigten Schnitt oder Spurende.")
+            return
+        key = (index, next_time, requested)
+        self._next_key = key
+        if key in self._cache and Path(self._cache[key]).is_file():
+            self.status.setText(f"Nächster bestätigter Abschnitt ab {next_time:.2f} s bereit.")
+            return
+        self._pending_key = key
+        self._pending_prefetch = True
+        payload = dict(track)
+        payload.update(target_time=next_time, sample_duration=requested)
+        self.status.setText(f"Nächsten bestätigten Abschnitt ab {next_time:.2f} s vorladen …")
+        self.preview_requested.emit(payload)
+
+    def _clip_ended(self):
+        if not self.continuous_checkbox.isChecked() or self._user_stopped:
+            return
+        if self._next_key is None:
+            self._queue_next()
+        if self._next_key is not None:
+            if self._next_key in self._cache and self._play_cached(self._next_key):
+                return
+            self._waiting_for_next = True
+            self.status.setText("Nächste Hörprobe wird noch vorbereitet …")
+
+    def _user_stop(self):
+        self._user_stopped = True
+        self._next_key = None
+        self._waiting_for_next = False
+        self.status.setText("Wiedergabe gestoppt. Für einen Neustart Auswahl abspielen wählen.")
+
+    def preview_failed(self):
+        self._pending_key = None
+        self._pending_prefetch = False
+        self._next_key = None
+        self._waiting_for_next = False
+
+    def preview_ready(self, path: str, actual_duration: float | None = None) -> bool:
+        """Cache up to four bounded WAVs; prefetch never interrupts current audio."""
         key = self._pending_key
         self._pending_key = None
         if key is None:
             return False
+        prefetched = self._pending_prefetch
+        self._pending_prefetch = False
         self._cache[key] = path
+        self._cache_duration[key] = actual_duration if actual_duration is not None else key[2]
         self._cache.move_to_end(key)
-        self.transport.release()
         while len(self._cache) > 4:
-            _, stale = self._cache.popitem(last=False)
+            stale_key, stale = self._cache.popitem(last=False)
+            self._cache_duration.pop(stale_key, None)
             if stale != path:
                 try:
                     Path(stale).unlink(missing_ok=True)
                 except OSError:
                     pass  # Private previews are also cleared at app shutdown.
-        return self.transport.play_clip(path)
+        if prefetched:
+            if (self._waiting_for_next and self._next_key == key and not self._user_stopped
+                    and self.continuous_checkbox.isChecked()):
+                return self._play_cached(key)
+            if not self._user_stopped:
+                self.status.setText(f"Nächster Abschnitt ab {key[1]:.2f} s vorgeladen.")
+            return True
+        return self._play_cached(key)
 
     def closeEvent(self, event):
         self.transport.release()
@@ -753,6 +852,7 @@ class SyncPreviewDialog(QDialog):
             except OSError:
                 pass
         self._cache.clear()
+        self._cache_duration.clear()
         super().closeEvent(event)
 
 
@@ -4348,36 +4448,19 @@ class MainWindow(QMainWindow):
         stream_index = int(request.get("stream_index", -1))
         target_time = float(request.get("target_time", 0.0))
         scale = float(request.get("scale", 1.0))
-        offset = float(request.get("offset", 0.0))
         duration = max(3.0, min(60.0, float(request.get("sample_duration", 12.0))))
         if not path or stream_index < 0 or not (0.5 <= scale <= 2.0):
             QMessageBox.warning(self, "Ungültige Hörprobe", "Die ausgewählte Audiospur oder Zeitkorrektur ist ungültig.")
             return
-        segments = request.get("segments") or []
-        if segments and not request.get("master"):
-            piece = next((item for item in segments
-                          if item.enabled and item.target_start <= target_time < item.target_end), None)
-            if piece is None:
-                QMessageBox.information(self, "Keine Audioabdeckung",
-                                        "Dieser Abschnitt des Bildmasters hat keine bestätigte passende Audioszene. "
-                                        "Wähle einen Zeitpunkt innerhalb eines bestätigten Abschnitts.")
-                return
-            source_time = piece.source_time_for_target(target_time)
-            if source_time is None:
-                return
-            # Never play through an unverified cut or into another scene.
-            duration = min(duration, piece.target_end - target_time,
-                           piece.source_end - source_time)
-        else:
-            source_time = target_time if request.get("master") else (target_time - offset) / scale
-        source_duration = float(request.get("duration", 0.0))
-        duration = min(duration, source_duration - source_time)
-        if source_time < 0 or duration < 0.3:
+        planned = plan_audition_window(request, target_time, duration)
+        if planned is None:
             QMessageBox.information(
                 self, "Keine Audioabdeckung",
-                f"Die Referenzzeit {target_time:.2f} s liegt für diese Spur außerhalb der verfügbaren Quellzeit (berechnet: {source_time:.2f} s). Wähle einen anderen Zeitpunkt."
+                f"Die Referenzzeit {target_time:.2f} s ist für diese Spur nicht durch einen "
+                "bestätigten, mindestens 0,3 s langen Abschnitt abgedeckt. Wähle einen anderen Zeitpunkt."
             )
             return
+        source_time, duration, _ratio = planned
         self._preview_dialog = sender if isinstance(sender, SyncPreviewDialog) else None
         output = self._preview_directory / f"preview-{uuid.uuid4().hex[:12]}.wav"
         self._log(
@@ -4428,7 +4511,7 @@ class MainWindow(QMainWindow):
                     except OSError:
                         pass
             report("Hörprobe bereit", 1, 1)
-            return str(output)
+            return {"path": str(output), "duration": duration}
 
         self._set_preview_dialog_busy(True, "Hörprobe wird erzeugt …")
         self._run_task("Erzeuge synchronisierte Hörprobe …", extract, self._preview_clip_ready)
@@ -4453,7 +4536,9 @@ class MainWindow(QMainWindow):
             # The dialog may have been closed while a short extraction was running.
             self._preview_dialog = None
 
-    def _preview_clip_ready(self, path: str):
+    def _preview_clip_ready(self, result: str | dict[str, Any]):
+        path = result["path"] if isinstance(result, dict) else result
+        actual_duration = result.get("duration") if isinstance(result, dict) else None
         dialog = self._preview_dialog
         self._set_preview_dialog_busy(False, "Hörprobe bereit. Du kannst einen anderen Zeitpunkt wählen und erneut vergleichen.")
         if dialog is not None:
@@ -4461,8 +4546,8 @@ class MainWindow(QMainWindow):
                 if not dialog.isVisible():
                     self.statusBar().showMessage("Hörprobe wurde erstellt; der Dialog ist bereits geschlossen.", 4500)
                     return
-                if dialog.preview_ready(path):
-                    self.statusBar().showMessage("Hörprobe wird im A/B-Player abgespielt.", 4500)
+                if dialog.preview_ready(path, actual_duration):
+                    self.statusBar().showMessage("A/B-Hörprobe bereit oder nächster Abschnitt vorgeladen.", 4500)
                     return
             except RuntimeError:
                 # A closed/deleted Qt dialog must not crash the worker callback.
@@ -5086,6 +5171,11 @@ class MainWindow(QMainWindow):
         self.insight_panel.show()
 
     def _worker_failed(self, details: str):
+        if self._preview_dialog is not None:
+            try:
+                self._preview_dialog.preview_failed()
+            except RuntimeError:
+                pass
         self._set_preview_dialog_busy(False, "Hörprobe fehlgeschlagen. Details stehen im Fehlerdialog und Diagnoseprotokoll.")
         self._logger.error("Hintergrundaufgabe fehlgeschlagen: %s", details)
         self._log("FEHLER: " + details.splitlines()[0])
