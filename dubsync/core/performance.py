@@ -315,7 +315,36 @@ def normalize_performance_settings(value: Any) -> dict[str, Any]:
         pass
     result["prewarm_metadata"] = bool(result["prewarm_metadata"])
     result["auto_system_profile"] = result["preset"] == "system"
+    # Decoder tuning is an explicit, host-bound opt-in. Existing profiles and
+    # settings without this marker keep FFmpeg's previous automatic threading.
+    tuned = value.get("cpu_decoder_tuning") if result["preset"] == "custom" else None
+    if _valid_cpu_decoder_tuning(tuned, int(result["cpu_threads"]), specs):
+        result["cpu_decoder_tuning"] = dict(tuned)
+    else:
+        result.pop("cpu_decoder_tuning", None)
     return result
+
+
+def _valid_cpu_decoder_tuning(tuning: Any, threads: int, specs: dict[str, Any]) -> bool:
+    return (1 <= threads <= specs["logical_cpus"] and
+            isinstance(tuning, dict) and
+            type(tuning.get("threads")) is int and tuning["threads"] == threads and
+            type(tuning.get("logical_cpus")) is int and
+            tuning["logical_cpus"] == specs["logical_cpus"] and
+            isinstance(tuning.get("cpu_model"), str) and
+            tuning["cpu_model"] == specs["cpu_model"])
+
+
+def cpu_decoder_threads_for_settings(settings: dict[str, Any],
+                                     specs: dict[str, Any] | None = None) -> int | None:
+    """Use a measured FFmpeg thread limit only on its original CPU budget."""
+    specs = specs if specs is not None else system_specs()
+    tuning = settings.get("cpu_decoder_tuning")
+    try:
+        threads = int(settings["cpu_threads"])
+    except (TypeError, ValueError, KeyError):
+        return None
+    return threads if _valid_cpu_decoder_tuning(tuning, threads, specs) else None
 
 
 def apply_cpu_thread_limit(threads: int) -> int:

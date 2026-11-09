@@ -475,7 +475,8 @@ def _sample_video_pair(source_path: str, target_path: str,
                        interval: float, progress: Progress | None, cancel_event,
                        hardware_accel: str, diagnostic: AlignmentDiagnostic | None,
                        frame_cache_enabled: bool, requested_workers: int,
-                       source_codec: str | None = None, target_codec: str | None = None
+                       source_codec: str | None = None, target_codec: str | None = None,
+                       cpu_threads: int | None = None,
                        ) -> tuple[list[FrameSample], list[FrameSample]]:
     """Read independent sources concurrently only when the resource policy permits."""
     specs = system_specs()
@@ -495,8 +496,17 @@ def _sample_video_pair(source_path: str, target_path: str,
     local_stop = threading.Event()
     stop = _CombinedCancel(cancel_event, local_stop)
     progress_lock = threading.Lock()
-    decode_threads = (max(1, min(12, int(specs.get("logical_cpus", 2)) // 2))
-                      if workers == 2 else None)
+    # An explicitly calibrated CPU limit must reach FFmpeg, not just OpenCV.
+    # In two-worker mode, never grant each decoder the full host CPU budget.
+    budget = max(1, int(specs.get("logical_cpus", 2)))
+    if cpu_threads is not None and not 1 <= cpu_threads <= budget:
+        raise ValueError("CPU-Threadlimit liegt außerhalb des verfügbaren Budgets")
+    per_decoder_cap = max(1, min(12, budget // 2))
+    decode_threads = (min(cpu_threads, per_decoder_cap) if cpu_threads is not None else per_decoder_cap
+                      ) if workers == 2 else cpu_threads
+    if diagnostic is not None:
+        diagnostic.stage("cpu_decoder_budget", requested_threads=cpu_threads,
+                         effective_threads=decode_threads, decoder_workers=workers)
 
     def run(task):
         key, path, duration, side, codec = task
@@ -1246,7 +1256,8 @@ def _align_videos_impl(source_path: str, target_path: str, interval: float = 0.5
                  target_info: MediaInfo | None = None,
                  diagnostic: AlignmentDiagnostic | None = None,
                  frame_cache_enabled: bool = True,
-                 sampling_workers: int = 1) -> AlignmentResult:
+                 sampling_workers: int = 1,
+                 cpu_threads: int | None = None) -> AlignmentResult:
     """Map source video time to target/master video time using perceptual frame alignment.
 
     Callers running a batch may pass already-probed metadata to avoid launching
@@ -1291,6 +1302,7 @@ def _align_videos_impl(source_path: str, target_path: str, interval: float = 0.5
         effective_interval, progress, cancel_event, hardware_accel, diagnostic,
         frame_cache_enabled, sampling_workers,
         source_info.video[0].codec_name, target_info.video[0].codec_name,
+        cpu_threads,
     )
     # First test for the common case: same episode/video timeline, different audio
     # track or re-encode. A same-timestamp visual check is both faster and more
@@ -1426,7 +1438,8 @@ def align_videos(source_path: str, target_path: str, interval: float = 0.5,
                  batch_context: dict | None = None,
                  diagnostic_sink=None,
                  frame_cache_enabled: bool = True,
-                 sampling_workers: int = 1) -> AlignmentResult:
+                 sampling_workers: int = 1,
+                 cpu_threads: int | None = None) -> AlignmentResult:
     """Run visual alignment and always persist bounded per-pair diagnostics.
 
     The diagnostic reporter cannot change the computed result or turn an unsafe
@@ -1447,7 +1460,7 @@ def align_videos(source_path: str, target_path: str, interval: float = 0.5,
         result = _align_videos_impl(
             source_path, target_path, interval, progress, cancel_event,
             max_samples, hardware_accel, source_info, target_info, diagnostic,
-            frame_cache_enabled, sampling_workers,
+            frame_cache_enabled, sampling_workers, cpu_threads,
         )
         selected = next((event["method"] for event in diagnostic.payload["events"]
                          if event.get("event") == "method_selected"), "unknown")

@@ -57,6 +57,29 @@ class ParallelSamplingTests(unittest.TestCase):
         self.assertEqual(visited, ["source.mkv", "master.mkv"])
         self.assertEqual(self.diag.payload["stages"]["sample_runtime"]["effective_workers"], 1)
 
+    def test_explicit_tuning_reaches_serial_ffmpeg_and_is_capped_for_parallel(self):
+        seen = []
+
+        def fake(*args, **_kwargs):
+            seen.append(args[9])  # decode_threads passed to _sample_with_cache
+            return [FrameSample(float(i), 10) for i in range(4)]
+
+        with (patch("dubsync.core.alignment.system_specs", return_value=self.specs),
+              patch("dubsync.core.alignment.sampling_worker_policy",
+                    side_effect=lambda _a, _b, workers, *_rest: (workers, "Test")),
+              patch("dubsync.core.alignment._sample_with_cache", side_effect=fake)):
+            _sample_video_pair("source.mkv", "master.mkv", 30, 30, .5,
+                               None, None, "ffmpeg", self.diag, False, 1,
+                               cpu_threads=8)
+            self.assertEqual(seen, [8, 8])
+            seen.clear()
+            _sample_video_pair("source.mkv", "master.mkv", 30, 30, .5,
+                               None, None, "ffmpeg", self.diag, False, 2,
+                               cpu_threads=8)
+        self.assertEqual(seen, [6, 6])
+        self.assertEqual(self.diag.payload["stages"]["cpu_decoder_budget"]
+                         ["effective_threads"], 6)
+
     def test_worker_failure_cancels_sibling(self):
         barrier = threading.Barrier(2)
         sibling_stopped = threading.Event()
@@ -95,13 +118,19 @@ class LocalMediaParallelIntegrationTests(unittest.TestCase):
                 "logical_cpus": 12, "ram_gib": 24.0}),
                   patch("dubsync.core.alignment.sampling_worker_policy",
                         return_value=(2, "Local synthetic test"))):
+                baseline = align_videos(str(source), str(master), interval=0.5,
+                                        max_samples=200, hardware_accel="ffmpeg",
+                                        frame_cache_enabled=False, sampling_workers=2)
                 result = align_videos(str(source), str(master), interval=0.5,
                                       max_samples=200, hardware_accel="ffmpeg",
                                       frame_cache_enabled=False, sampling_workers=2,
-                                      diagnostic_sink=reports.append)
+                                      cpu_threads=2, diagnostic_sink=reports.append)
             self.assertTrue(result.safe_for_automatic_export)
+            self.assertEqual(result.anchors, baseline.anchors)
+            self.assertEqual(result.safe_for_automatic_export, baseline.safe_for_automatic_export)
             stage = reports[0]["stages"]
             self.assertEqual(stage["sample_runtime"]["effective_workers"], 2)
+            self.assertEqual(stage["cpu_decoder_budget"]["effective_threads"], 2)
             self.assertTrue(stage["pipeline_profile"]["complete"])
             self.assertGreater(stage["pipeline_profile"]["total_wall_seconds"], 0)
 

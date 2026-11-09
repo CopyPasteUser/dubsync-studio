@@ -21,7 +21,7 @@ def _benchmark_windows(duration: float, seconds: float) -> tuple[float, ...]:
 def compare_cpu_decode_threads(path: str, duration: float, *, seconds: float = 12.,
                                interval: float = .75, repetitions: int = 3,
                                logical_cpus: int | None = None,
-                               cancel_event=None) -> dict:
+                               cancel_event=None, progress=None) -> dict:
     """Find a useful *suggestion*, without changing hardware settings.
 
     Candidates decode identical windows; on long episodes these cover three
@@ -51,6 +51,8 @@ def compare_cpu_decode_threads(path: str, duration: float, *, seconds: float = 1
     errors: dict[int | None, str] = {}
     refs: list[list[tuple[float, int]] | None] = [None for _ in starts]
     mismatches: set[int | None] = set()
+    completed = 0
+    total = repetitions * len(options) * len(starts)
     for trial in range(repetitions):
         for option in (options if trial % 2 == 0 else list(reversed(options))):
             if cancel_event is not None and cancel_event.is_set():
@@ -62,6 +64,8 @@ def compare_cpu_decode_threads(path: str, duration: float, *, seconds: float = 1
             for index in indices:
                 if cancel_event is not None and cancel_event.is_set():
                     raise RuntimeError("CPU-Decodervergleich abgebrochen")
+                if progress is not None:
+                    progress(completed, total, "Standard" if option is None else f"{option} Threads")
                 started = time.perf_counter()
                 try:
                     frames = ffmpeg_sample(path, duration, interval, perceptual_hash,
@@ -81,8 +85,11 @@ def compare_cpu_decode_threads(path: str, duration: float, *, seconds: float = 1
                     break
                 window_timings[option][index].append(elapsed)
                 elapsed_total += elapsed
+                completed += 1
             else:
                 timings[option].append(elapsed_total)
+    if progress is not None:
+        progress(total, total, "Auswertung")
     if not timings[None] or len(timings[None]) != repetitions:
         raise RuntimeError("Standard-FFmpeg-Decoder konnte nicht reproduzierbar gemessen werden")
     baseline = statistics.median(timings[None])

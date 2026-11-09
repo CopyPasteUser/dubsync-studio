@@ -21,6 +21,7 @@ No billing, authentication or cloud CRUD is present.
 | Frame fingerprint cache | PerformanceSettingsDialog / QCheckBox | core/performance.py, core/frame_cache.py | on/off, default on; result cache always off | tests/test_frame_cache.py, tests/test_gui_smoke.py |
 | Decoder workers | PerformanceSettingsDialog / QComboBox | core/performance.py, core/alignment.py | 1/2, effective count resource- and source-dependent | tests/test_parallel_sampling.py, tests/test_performance.py |
 | Adaptive resource presets | MainWindow.profile_quick_combo / PerformanceSettingsDialog | core/performance.py | Auto recommends one of Leicht/Mittel/Stark; custom retains manual budgets | tests/test_performance.py; tests/test_gui_smoke.py; tests/test_studio_workspace.py |
+| CPU decoder autotuning | gui/autotune.py / PerformanceSettingsDialog | core/autotune.py + core/performance.py host-bound opt-in | local single-file QThread benchmark, exact parity gate, explicit accept then settings save; NAS excluded | tests/test_autotune.py; tests/test_gui_smoke.py; tests/test_parallel_sampling.py |
 | Durable batch queue | BatchQueueDialog / QTableWidget | core/job_queue.py SQLite entries; core/batch_diagnostics.py proof | explicit start/restart/retry/drain; no implicit startup | tests/test_job_queue.py; tests/test_gui_smoke.py |
 | Inline queue room | QueueControlRoom / QTableWidget | same BatchJobQueue SQLite `recent()`; original start/retry/drain callbacks | scrollable 2.0 Stapelzentrale; original dialog retained | tests/test_workbench_2.py |
 | Visual review | StudioReviewPanel / AlignmentTimeline | live selected AlignmentResult and MediaInfo | anchor/segment plot; user-chosen source; explicit two-still loading | tests/test_workbench_2.py; real NAS pending |
@@ -67,6 +68,14 @@ No billing, authentication or cloud CRUD is present.
   persisted preset is resolved against the currently available hardware each
   launch; custom numeric budgets remain explicitly bounded. Auto-decoder
   preview lists only candidates, never asserts proven GPU execution.
+- CPU autotuning is initiated only from performance settings, processes a
+  representative local video in a cancellable worker and leaves existing
+  settings unchanged unless a verified ≥15% recommendation passes exact
+  fingerprint and per-window regression checks, the user accepts it, and
+  subsequently saves the parent form. A change of CPU model/CPU quota,
+  manual thread count, or resource preset revokes the calibration. Dual
+  decoder runs retain the per-worker CPU cap; GPU and export safety are
+  untouched. A single media file is not a universal performance proof.
 - Batch continuation: optional explicit journal file selection on the series
   page; incompatible reports fail visibly. Only per-episode matched recipe,
   sources, output signature and fresh video/audio probe count as verified.

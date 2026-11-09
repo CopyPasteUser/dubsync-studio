@@ -45,7 +45,13 @@ They do not demonstrate a completed export or measured GPU performance.</sub>
   separate points, including the middle and later scenes, but candidates that
   fail the first check are eliminated before additional reads. When free RAM
   falls below 2 GiB, DubSync uses one decoder; NAS media skip extra probes.
-  A manual decoder self-test is available under System Diagnostics.
+  a manual decoder self-test is available under System Diagnostics. CPU thread
+  autotuning is optional under **Settings → Performance → CPU-Decoder automatisch
+  einmessen**: measure a representative **local** video, inspect exact frame
+  parity and measured gain, explicitly **Übernehmen**, then **Speichern**.
+  The verified FFmpeg CPU setting is limited to the measured CPU model and
+  available CPU budget; changing hardware or a preset disables it. Default
+  behavior, GPU auto-selection and export safety remain unchanged.
 
 ## Get started
 

@@ -218,8 +218,12 @@ def main(argv: list[str] | None = None) -> int:
         from dubsync.core.thread_benchmark import compare_cpu_decode_threads
         from dubsync.core.network import is_network_path
         from dubsync.core.probe import probe_media
-        source = Path(args.benchmark_threads).expanduser().resolve()
-        if not source.is_file() or is_network_path(str(source)):
+        # Resolve local symlinks before stat, but reject network-mounted paths
+        # first: an unavailable hard-mounted NAS can block metadata access.
+        selected = os.path.abspath(os.path.expanduser(args.benchmark_threads))
+        source = Path(os.path.realpath(selected))
+        if (is_network_path(selected) or is_network_path(str(source)) or
+                not source.is_file()):
             print("Bitte eine lokale, lesbare Videodatei wählen (kein NAS).", file=sys.stderr)
             return 2
         if not 3 <= args.benchmark_seconds <= 120:
