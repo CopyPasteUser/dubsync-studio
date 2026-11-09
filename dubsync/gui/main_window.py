@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 
 from dubsync.gui.theme import studio_stylesheet
 from dubsync.gui.workbench import StudioReviewPanel
+from dubsync.gui.episode_explorer import EpisodeExplorerDialog
 from dubsync.gui.queue_room import QueueControlRoom
 
 from dubsync.core.alignment import AlignmentError, align_videos
@@ -1787,6 +1788,7 @@ class MainWindow(QMainWindow):
         self.review_panel = StudioReviewPanel()
         self.review_panel.audioRequested.connect(self.preview_sync_audio)
         self.review_panel.sourceChanged.connect(self._review_source_changed)
+        self.review_panel.candidateRequested.connect(self._explore_episode_candidates)
         review_scroll = QScrollArea()
         review_scroll.setObjectName("reviewViewport")
         review_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -2011,6 +2013,38 @@ class MainWindow(QMainWindow):
 
     def _review_source_changed(self, _path: str):
         self.review_panel.refresh(self._review_alignments())
+
+    def _explore_episode_candidates(self):
+        """Run a bounded cross-episode visual review; never alter group ownership."""
+        master = self.selected_master
+        if not master or master not in self.media_cache or self.worker is not None:
+            QMessageBox.information(self, "Kandidatenprüfung", "Wähle einen geladenen Bildmaster und warte laufende Aufgaben ab.")
+            return
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Zusätzliche Videokandidaten für Bildvergleich wählen",
+            str(Path(master).parent),
+            "Videodateien (*.mkv *.mp4 *.avi *.mov *.m4v *.webm *.ts);;Alle Dateien (*)",
+        )
+        if not paths:
+            return
+        if len(paths) > 8 or any(Path(item).resolve() == Path(master).resolve() for item in paths):
+            QMessageBox.warning(self, "Kandidatenprüfung",
+                                "Bitte höchstens acht verschiedene Zusatzvideos auswählen, nicht den Bildmaster selbst.")
+            return
+        from dubsync.core.episode_explorer import rank_episode_candidates
+
+        def inspect(report, cancel_event):
+            return rank_episode_candidates(
+                master, paths, cancel_event=cancel_event,
+                progress=lambda i, total, name: report(
+                    f"Bildkandidaten prüfen · {name}", i - 1, total),
+            )
+
+        def display(result):
+            dialog = EpisodeExplorerDialog(result, self)
+            dialog.exec()
+
+        self._run_task("Bildkandidaten prüfen (ohne Export)", inspect, display)
 
     def _focus_episode_search(self):
         self._navigate_to(0)

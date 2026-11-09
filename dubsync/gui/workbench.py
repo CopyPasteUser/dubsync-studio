@@ -308,6 +308,7 @@ class StudioReviewPanel(QFrame):
     compareRequested = Signal(str, str, float, object)
     sourceChanged = Signal(str)
     audioRequested = Signal()
+    candidateRequested = Signal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -338,6 +339,12 @@ class StudioReviewPanel(QFrame):
         self.source_combo.setAccessibleName("Quellfassung für Bildvergleich")
         self.source_combo.currentIndexChanged.connect(self._source_selected)
         source_line.addWidget(self.source_combo, 1)
+        self.candidate_button = QPushButton("Kandidaten …")
+        self.candidate_button.setAccessibleName("Weitere Episodenfassungen anhand von Bildern vergleichen")
+        self.candidate_button.setToolTip("Bis zu acht zusätzliche Videos prüfen; keine automatische Episodenzuordnung")
+        self.candidate_button.setEnabled(False)
+        self.candidate_button.clicked.connect(self.candidateRequested)
+        source_line.addWidget(self.candidate_button)
         layout.addLayout(source_line)
         self.quality_label = QLabel("Scanne eine Folge und wähle eine Fassung für die Analyse.")
         self.quality_label.setObjectName("reviewVerdict")
@@ -471,6 +478,7 @@ class StudioReviewPanel(QFrame):
         self.source_combo.blockSignals(True)
         self.source_combo.clear()
         self.source_combo.blockSignals(False)
+        self.candidate_button.setEnabled(False)
         self.timeline.set_data(0, None)
         self.issue_combo.clear()
         self.issue_button.setEnabled(False)
@@ -490,6 +498,7 @@ class StudioReviewPanel(QFrame):
         self.episode_label.setText(group.display_name)
         self._master = master
         self._media = media
+        self.candidate_button.setEnabled(bool(master and master in media and media[master].video))
         candidates = [path for path in group.files if path != master and path in media and media[path].video]
         names = Counter(Path(path).name for path in candidates)
         self.source_combo.blockSignals(True)

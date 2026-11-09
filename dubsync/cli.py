@@ -91,6 +91,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--benchmark-decode", metavar="VIDEO", help="CPU/GPU-Dekodierleistung für ein lokales Video messen (nur lesend).")
     parser.add_argument("--profile-alignment", nargs=2, metavar=("QUELLE", "MASTER"),
                         help="Vollständigen Bildabgleich und Laufzeiten für zwei Videos prüfen (kein Export).")
+    parser.add_argument("--explore-episode", nargs="+", metavar="VIDEO",
+                        help="MASTER und 1–8 mögliche Fassungen visuell vergleichen (nur Prüfung, keine Neuzuordnung).")
     parser.add_argument("--profile-workers", choices=(1, 2), type=int, default=1,
                         help="Video-Decoder für --profile-alignment: 1 oder 2 (NAS bleibt seriell).")
     parser.add_argument("--profile-decoder", choices=("auto", "none", "ffmpeg", "cuda", "vaapi",
@@ -104,7 +106,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     requested = (args.doctor, args.latest_alignment, args.list_alignments, args.latest_batch,
                  args.list_batches, args.queue_status, bool(args.scan_library),
-                 args.benchmark_decode, args.profile_alignment)
+                 args.benchmark_decode, args.profile_alignment, args.explore_episode)
     if args.json and not any(requested):
         parser.error("--json erfordert eine Diagnoseoption.")
     if sum(bool(value) for value in requested) > 1:
@@ -152,6 +154,31 @@ def main(argv: list[str] | None = None) -> int:
             for row in summary["recent"]:
                 print(f"  {row['state']} | #{row['id'][:8]} | {row['progress_current']}/{row['progress_total']}")
         return 0
+    if args.explore_episode:
+        if not 2 <= len(args.explore_episode) <= 9:
+            parser.error("--explore-episode benötigt einen Master und 1–8 Videokandidaten")
+        from dubsync.core.episode_explorer import rank_episode_candidates
+        try:
+            report = rank_episode_candidates(
+                args.explore_episode[0], args.explore_episode[1:],
+                hardware_accel=args.profile_decoder,
+                progress=(None if args.json else
+                          lambda i, n, name: print(f"[{i}/{n}] Prüfe {name} …")),
+            )
+        except (OSError, ValueError, RuntimeError) as exc:
+            print(f"Episodenprüfung fehlgeschlagen: {exc}", file=sys.stderr)
+            return 2
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print(f"Bildmaster: {report['master_filename']} · Ergebnis: {report['verdict']}")
+            for candidate in report["candidates"]:
+                evidence = candidate["visual_proof"] or {}
+                quality = (f" · {evidence['anchors']} Bildanker · Abdeckung {evidence['coverage']:.1%}"
+                           if evidence else "")
+                print(f"  #{candidate['candidate']} {candidate['filename']}: {candidate['status']}{quality}")
+            print("Nur Sichtprüfung – keine automatische Neuzuordnung oder Exportfreigabe.")
+        return 0 if report["verdict"] == "single_visual_candidate" else 1
     if args.profile_alignment:
         from dubsync.core.alignment import align_videos
         from dubsync.core.alignment_diagnostics import summarize_diagnostic
