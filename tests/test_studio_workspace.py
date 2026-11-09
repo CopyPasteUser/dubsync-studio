@@ -4,7 +4,7 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 import pytest
 from PySide6.QtCore import Qt, QCoreApplication, QEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QScrollArea
+from PySide6.QtWidgets import QApplication, QLabel, QScrollArea
 from dubsync.gui.main_window import MainWindow, SourceRow
 from dubsync.core.models import EpisodeGroup, MediaInfo, StreamInfo
 
@@ -106,6 +106,65 @@ def test_small_studio_keeps_first_action_visible_and_rest_scrollable(window):
     window.resize(1440, 900)
     QApplication.processEvents()
     assert studio.verticalScrollBar().maximum() == 0
+
+
+@pytest.mark.parametrize('width,height', [(980, 680), (1440, 900)])
+def test_review_focus_keeps_session_and_restores_panes(window, width, height):
+    window.resize(width, height)
+    QApplication.processEvents()
+    splitter = window.studio_splitter
+    initial = splitter.sizes()
+    assert all(size > 0 for size in initial)
+    window.output_dir_edit.setText('/tmp/focus-export')
+    window.episode_search.setText('episode')
+    was_dirty = window.project_dirty
+
+    window.review_focus_button.click()
+    QApplication.processEvents()
+    assert window.review_focus_button.isChecked()
+    assert splitter.widget(0).isHidden() and splitter.widget(2).isHidden()
+    assert splitter.sizes()[1] > initial[1]
+    assert window.review_focus_button.text() == 'Drei Bereiche anzeigen'
+
+    window._navigate_to(1)
+    assert not window.review_focus_button.isVisible()
+    window._navigate_to(0)
+    assert window.review_focus_button.isVisible() and window.review_focus_button.isChecked()
+    assert splitter.widget(0).isHidden() and splitter.widget(2).isHidden()
+
+    window.review_focus_button.click()
+    QApplication.processEvents()
+    assert not window.review_focus_button.isChecked()
+    assert not splitter.widget(0).isHidden() and not splitter.widget(2).isHidden()
+    assert all(abs(actual - prior) <= 2 for actual, prior in zip(splitter.sizes(), initial))
+    assert window.output_dir_edit.text() == '/tmp/focus-export'
+    assert window.episode_search.text() == 'episode'
+    assert window.project_dirty == was_dirty
+
+
+def test_long_episode_and_audio_titles_retain_full_access(window, monkeypatch):
+    monkeypatch.setattr(window, '_start_metadata_prewarm', lambda: None)
+    display_name = 'Eine sehr lange Serie mit Episodentitel und mehreren Sprachen — S01E123 — Director Cut'
+    # Synthetic paths must not start the real asynchronous FFprobe selection worker.
+    window.episode_table.blockSignals(True)
+    window._scan_done([EpisodeGroup('long', display_name, ['/tmp/de.mkv', '/tmp/en.mkv'])])
+    window.episode_table.blockSignals(False)
+    title = window.episode_table.item(0, 0)
+    assert title.text() == display_name
+    assert title.toolTip() == display_name
+
+    path = '/tmp/very-long-source-filename-with-source-language-and-suffix-1234567890.mkv'
+    long_track = 'Lange Originaltonspur – Audiodeskription und mehrsprachige Redaktion'
+    info = MediaInfo(path, 120, 'matroska', 1000,
+                     [StreamInfo(1, 'audio', language='deu', title=long_track, channels=2)],
+                     0, 1, 0)
+    row = SourceRow(path, info, parent=window.detail_content)
+    source_title = next(label for label in row.findChildren(QLabel)
+                        if label.objectName() == 'sourceName')
+    assert source_title.toolTip() == path
+    assert source_title.textInteractionFlags() & Qt.TextInteractionFlag.TextSelectableByMouse
+    assert long_track in row.audio_combo.itemText(0)
+    assert row.audio_combo.itemData(0, Qt.ItemDataRole.ToolTipRole) == row.audio_combo.itemText(0)
 
 
 def test_switching_light_medium_strong_preserves_analysis_and_gpu_auto(window):

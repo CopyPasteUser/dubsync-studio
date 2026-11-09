@@ -896,6 +896,8 @@ class SourceRow(QFrame):
         name = QLabel(Path(path).name)
         name.setObjectName("sourceName")
         name.setWordWrap(True)
+        name.setToolTip(path)
+        name.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(name)
         metadata = QLabel(describe_media(info))
         metadata.setObjectName("mutedText")
@@ -914,7 +916,9 @@ class SourceRow(QFrame):
             lang = language_display_name(stream.language) or (stream.language.upper() if stream.language != "und" else "Sprache unbekannt")
             title = stream.title or default_track_title(stream.language, "", path) or f"Audio {ordinal + 1}"
             channels = f" · {stream.channels}ch" if stream.channels else ""
-            self.audio_combo.addItem(f"{ordinal + 1}: {lang} · {title}{channels}", ordinal)
+            track_label = f"{ordinal + 1}: {lang} · {title}{channels}"
+            self.audio_combo.addItem(track_label, ordinal)
+            self.audio_combo.setItemData(ordinal, track_label, Qt.ItemDataRole.ToolTipRole)
         if info.audio:
             try:
                 self.audio_combo.setCurrentIndex(choose_default_audio(info))
@@ -2021,6 +2025,14 @@ class MainWindow(QMainWindow):
             button.clicked.connect(lambda _checked=False, page=index: self._navigate_to(page))
             nav.addWidget(button)
             self._nav_buttons.append(button)
+        self.review_focus_button = QPushButton("Vergleich vergrößern")
+        self.review_focus_button.setObjectName("viewToggleButton")
+        self.review_focus_button.setCheckable(True)
+        self.review_focus_button.setShortcut("Alt+0")
+        self.review_focus_button.setToolTip("Vergleich ohne Episodenliste und Spureditor anzeigen · Alt+0")
+        self.review_focus_button.setAccessibleName("Vergleich vergrößern")
+        self.review_focus_button.toggled.connect(self._set_review_focus)
+        nav.addWidget(self.review_focus_button)
         nav.addStretch(1)
         self.sidebar_state = QLabel("Neue Sitzung")
         self.sidebar_state.setObjectName("mutedText")
@@ -2090,6 +2102,8 @@ class MainWindow(QMainWindow):
         review_scroll.setMinimumWidth(290)
         splitter.insertWidget(1, review_scroll)
         splitter.setSizes([310, 435, 515])
+        self.studio_splitter = splitter
+        self._splitter_state_before_focus = None
 
         # Page 1: real three-pane review desk, one episode at a time.
         library = QWidget()
@@ -2308,11 +2322,33 @@ class MainWindow(QMainWindow):
         self._page_stack.setCurrentIndex(page)
         for index, button in enumerate(self._nav_buttons):
             button.setChecked(index == page)
+        self.review_focus_button.setVisible(page == 0)
         self.statusBar().showMessage(
             ("Quellen · Framevergleich · Spuren", "Stapel und Ausgabe", "Verarbeitung und Diagnose")[page], 2500
         ) if self.statusBar() is not None else None
         if page == 1 and hasattr(self, "queue_room"):
             self._refresh_inline_queue()
+
+    def _set_review_focus(self, focused: bool):
+        """Expand the evidence monitor without rebuilding the episode editor."""
+        splitter = self.studio_splitter
+        if focused:
+            self._splitter_state_before_focus = splitter.saveState()
+            splitter.widget(0).hide()
+            splitter.widget(2).hide()
+            label = "Drei Bereiche anzeigen"
+            hint = "Episodenliste und Spureditor wieder einblenden · Alt+0"
+        else:
+            splitter.widget(0).show()
+            splitter.widget(2).show()
+            if self._splitter_state_before_focus is not None:
+                splitter.restoreState(self._splitter_state_before_focus)
+            self._splitter_state_before_focus = None
+            label = "Vergleich vergrößern"
+            hint = "Vergleich ohne Episodenliste und Spureditor anzeigen · Alt+0"
+        self.review_focus_button.setText(label)
+        self.review_focus_button.setAccessibleName(label)
+        self.review_focus_button.setToolTip(hint)
 
     def _review_source_changed(self, _path: str):
         self.review_panel.refresh(self._review_alignments())
@@ -3947,6 +3983,7 @@ class MainWindow(QMainWindow):
             self.episode_table.insertRow(row)
             title = QTableWidgetItem(group.display_name)
             title.setData(Qt.ItemDataRole.UserRole, group.key)
+            title.setToolTip(group.display_name)
             self.episode_table.setItem(row, 0, title)
             self.episode_table.setItem(row, 1, QTableWidgetItem(str(group.count)))
             languages = set()
