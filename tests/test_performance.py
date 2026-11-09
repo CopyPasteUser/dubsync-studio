@@ -153,6 +153,24 @@ class PerformanceSettingTests(unittest.TestCase):
         self.assertEqual(settings_for_preset("quality", weak)["sampling_workers"], 1)
         self.assertEqual(settings_for_preset("fast", strong)["sampling_workers"], 1)
 
+    def test_balanced_profile_uses_two_decoders_when_local_cpu_budget_is_sufficient(self):
+        four_cores = {"physical_cores": 4, "logical_cpus": 4, "ram_gib": 8}
+        hyperthreaded_dual = {"physical_cores": 2, "logical_cpus": 4, "ram_gib": 16}
+        memory_limited = {"physical_cores": 8, "logical_cpus": 16, "ram_gib": 6}
+        self.assertEqual(settings_for_preset("balanced", four_cores)["sampling_workers"], 2)
+        self.assertEqual(settings_for_preset("balanced", hyperthreaded_dual)["sampling_workers"], 1)
+        self.assertEqual(settings_for_preset("balanced", memory_limited)["sampling_workers"], 1)
+
+    def test_saved_balanced_preset_adopts_safe_parallelism_on_upgrade(self):
+        previous = {"preset": "balanced", "sampling_workers": 1,
+                    "cpu_threads": 2, "probe_workers": 2}
+        with patch("dubsync.core.performance.system_specs", return_value={
+            "physical_cores": 4, "logical_cpus": 8, "ram_gib": 16,
+        }):
+            updated = normalize_performance_settings(previous)
+        self.assertEqual(updated["sampling_workers"], 2)
+        self.assertEqual(updated["preset"], "balanced")
+
     def test_old_fast_settings_cannot_inherit_quality_parallelism(self):
         with patch("dubsync.core.performance.system_specs", return_value={
             "physical_cores": 12, "logical_cpus": 16, "ram_gib": 32, "gpu_vendors": [],
