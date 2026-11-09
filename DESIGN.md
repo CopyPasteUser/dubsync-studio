@@ -111,7 +111,9 @@ No added animations, timers or polling. Native progress is functional feedback.
 German actions name their result. No speculative live CPU/GPU data. Technical logs
 retain only 3000 on-screen blocks; persistent rotating logs and reports remain.
 The 3.0 timeline partitions nearby sampled proof, unverified time and unmapped
-scenes using both labels and color. Largest gaps are reachable by keyboard,
+scenes using both labels and color. The monitor summarizes the proportion of
+each zone and names the selected cursor's status; successful automatic picture
+proof is distinct from final export authorization. Largest gaps are reachable by keyboard,
 but navigation never authorizes export. Side-by-side stills are read
 on demand through a bounded, cancellable FFmpeg process, not at startup.
 Waveforms use the same opt-in model (18-second mono windows, bounded resolution,

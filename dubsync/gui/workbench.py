@@ -45,7 +45,8 @@ def review_position(alignment: AlignmentResult | None, target_time: float,
         state = "Nomineller Zeitvergleich · kein Bildabgleich vorhanden"
     else:
         time_point = alignment.source_time(target_time)
-        state = ("Visuell geprüfte Zuordnung" if alignment.safe_for_automatic_export
+        state = ("Bildabgleich insgesamt bestanden · Einzelposition nicht vollständig geprüft"
+                 if alignment.safe_for_automatic_export
                  else "Vorläufige Zuordnung · Sicherheitsschwelle nicht erreicht")
     if time_point is None:
         return None, "Kein zugeordnetes Bild · Abschnitt bleibt im Export stumm"
@@ -350,6 +351,14 @@ class StudioReviewPanel(QFrame):
         self.quality_label.setObjectName("reviewVerdict")
         self.quality_label.setWordWrap(True)
         layout.addWidget(self.quality_label)
+        self.evidence_summary_label = QLabel("Zeitachsen-Belege erscheinen nach der Bildanalyse.")
+        self.evidence_summary_label.setObjectName("mutedText")
+        self.evidence_summary_label.setAccessibleName("Zeitachsen-Belege nach Messstatus")
+        self.evidence_summary_label.setToolTip(
+            "Bildproben markieren nur gemessene Stellen. Die übrige Folge ist nicht dadurch verifiziert."
+        )
+        self.evidence_summary_label.setWordWrap(True)
+        layout.addWidget(self.evidence_summary_label)
         self.review_tabs = QTabWidget()
         self.review_tabs.setObjectName("reviewTabs")
         self.review_tabs.setAccessibleName("Abgleich-Monitor: Zeitachse, Standbilder oder Audiowellen")
@@ -391,6 +400,11 @@ class StudioReviewPanel(QFrame):
         position_row.addWidget(zoom_out)
         position_row.addWidget(zoom_in)
         timeline_layout.addLayout(position_row)
+        self.position_evidence_label = QLabel("Aktuelle Position · kein Bildabgleich")
+        self.position_evidence_label.setObjectName("mutedText")
+        self.position_evidence_label.setAccessibleName("Bildbeleg an der aktuellen Zeitposition")
+        self.position_evidence_label.setWordWrap(True)
+        timeline_layout.addWidget(self.position_evidence_label)
         issue_line = QHBoxLayout()
         self.issue_combo = QComboBox()
         self.issue_combo.setAccessibleName("Ungeprüfte oder nicht zugeordnete Zeitbereiche")
@@ -488,6 +502,10 @@ class StudioReviewPanel(QFrame):
         self._clear_waveforms()
         self.quality_label.setText("Fassungen und Analyseergebnisse erscheinen nach dem Scan.")
         self.quality_label.setProperty("state", "unknown")
+        self.quality_label.setToolTip("")
+        self.evidence_summary_label.setText("Zeitachsen-Belege erscheinen nach der Bildanalyse.")
+        self.position_evidence_label.setText("Aktuelle Position · kein Bildabgleich")
+        self.position_evidence_label.setProperty("state", "unknown")
         self.quality_label.style().unpolish(self.quality_label)
         self.quality_label.style().polish(self.quality_label)
 
@@ -526,6 +544,7 @@ class StudioReviewPanel(QFrame):
         self.seek.setValue(int(self.timeline.position / max(.001, self.timeline.duration) * 1000))
         self.seek.blockSignals(False)
         self.position_label.setText(f"{formatted_time(self.timeline.position)} / {formatted_time(self.timeline.duration)}")
+        self._update_position_evidence(self.timeline.position)
 
     def _source_selected(self, _index: int) -> None:
         self._source = self.source_combo.currentData()
@@ -550,23 +569,62 @@ class StudioReviewPanel(QFrame):
         self._clear_frames()
         self._clear_waveforms()
         if alignment is None:
-            self.quality_label.setText("NOCH NICHT ANALYSIERT · Bildvergleich nur nominell, kein Match-Nachweis")
+            self.quality_label.setText("NICHT ZUGEORDNET · Noch keine Bildanalyse; Vergleich nur nominell")
             self.quality_label.setProperty("state", "unknown")
+            self.quality_label.setToolTip("Für diese Fassung fehlen Bildanker und eine geprüfte Zeitzuordnung.")
+            self.evidence_summary_label.setText("Zeitachse: noch keine gemessenen Bildbelege")
         else:
-            verdict = "AUTO-EXPORT FREIGEGEBEN" if alignment.safe_for_automatic_export else "PRÜFUNG ERFORDERLICH"
+            approved = alignment.safe_for_automatic_export
+            verdict = ("BILDABGLEICH BESTANDEN · Automatikprüfung positiv" if approved else
+                       "VORLÄUFIG · PRÜFUNG ERFORDERLICH · Automatischer Export nicht freigegeben")
+            reasons = export_hold_reasons(alignment)
             self.quality_label.setText(
                 f"{verdict} · {alignment.confidence:.0%} Konfidenz · "
                 f"{len(alignment.anchors)} Anker · {alignment.coverage:.0%} Abdeckung\n"
                 f"Größte Lücke Mitte {alignment.max_unverified_middle_ratio:.1%} · "
                 f"Rand {alignment.max_unverified_edge_ratio:.1%}"
-                + ("\nGrund: " + "; ".join(export_hold_reasons(alignment)[:2])
-                   if not alignment.safe_for_automatic_export else "")
+                + ("\nGründe: " + "; ".join(reasons[:2]) if reasons else
+                   "\nExport wird vor dem Schreiben erneut geprüft.")
             )
-            self.quality_label.setProperty("state", "safe" if alignment.safe_for_automatic_export else "unsafe")
+            self.quality_label.setToolTip("\n".join(reasons) if reasons else
+                                          "Automatischer Bildabgleich bestanden. Die Export-Vorprüfung bleibt verbindlich.")
+            self.quality_label.setProperty("state", "safe" if approved else "unsafe")
+            duration = alignment.target_duration
+            if math.isfinite(duration) and duration > 0:
+                measured = {status: sum(span.duration for span in self.timeline.evidence
+                                        if span.status == status)
+                            for status in ("sampled", "unverified", "unmapped")}
+                self.evidence_summary_label.setText(
+                    "Zeitachsen-Zonen · "
+                    f"Bildproben {measured['sampled'] / duration:.0%} · "
+                    f"Ungeprüft {measured['unverified'] / duration:.0%} · "
+                    f"Ohne Zuordnung {measured['unmapped'] / duration:.0%}"
+                )
+            else:
+                self.evidence_summary_label.setText("Zeitachsen-Zonen: keine gültige Referenzlaufzeit")
         self.quality_label.style().unpolish(self.quality_label)
         self.quality_label.style().polish(self.quality_label)
         self._position_changed(0)
         self.frame_status.setText("Bildvorschau auf Abruf · die Timeline zeigt nur Messdaten.")
+
+    def _update_position_evidence(self, seconds: float) -> None:
+        if self._alignment is None:
+            state, message = "unknown", "Kein Bildabgleich · nur nominelle Zeitposition"
+        else:
+            state = next((span.status for span in self.timeline.evidence
+                          if span.start <= seconds < span.end or
+                          (math.isclose(seconds, self.timeline.duration, abs_tol=0.001)
+                           and math.isclose(span.end, seconds, abs_tol=0.001))), "unknown")
+            message = {
+                "sampled": "Bildprobe in der Nähe · keine durchgehende Sichtprüfung",
+                "unverified": "Ungeprüfter Bereich · an dieser Stelle kein Bildbeleg",
+                "unmapped": "Ohne Zuordnung · an dieser Stelle keine passende Quellzeit",
+                "unknown": "Keine verwertbaren Zeitachsen-Belege an dieser Stelle",
+            }[state]
+            if self._alignment.manual_segments:
+                message += " · manuell bearbeitet, nicht automatisch freigegeben"
+        self.position_evidence_label.setText(f"Aktuelle Position · {message}")
+        self.position_evidence_label.setProperty("state", state)
 
     def _update_issues(self, alignment: AlignmentResult | None) -> None:
         self.issue_combo.clear()
@@ -595,6 +653,7 @@ class StudioReviewPanel(QFrame):
         # moves, discard the result rather than mislabel it as the new position.
         self._generation += 1
         self.position_label.setText(f"{formatted_time(seconds)} / {formatted_time(self.timeline.duration)}")
+        self._update_position_evidence(seconds)
         self.frame_status.setText("Position geändert · Frames bei Bedarf neu laden")
         for label in self.frames:
             label.reset_image("Noch kein Frame an dieser Position")

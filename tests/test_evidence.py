@@ -63,6 +63,49 @@ class EvidenceMapTests(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get("QT_QPA_PLATFORM") == "offscreen", "Requires offscreen Qt")
 class EvidenceNavigationTests(unittest.TestCase):
+    def test_monitor_explains_proof_at_cursor_without_changing_export(self):
+        from PySide6.QtWidgets import QApplication
+        from dubsync.gui.workbench import StudioReviewPanel
+        from dubsync.core.models import EpisodeGroup, MediaInfo, StreamInfo
+
+        app = QApplication.instance() or QApplication([])
+        master, source = "master", "source"
+        group = EpisodeGroup("demo", "Demo", [master, source])
+        media = {path: MediaInfo(path, 40, "matroska", 100,
+                                 [StreamInfo(0, "video")], 1, 0, 0)
+                 for path in (master, source)}
+        result = alignment()
+        panel = StudioReviewPanel()
+        try:
+            panel.show_group(group, master, media, {(master, source): result})
+            self.assertIn("VORLÄUFIG", panel.quality_label.text())
+            self.assertIn("PRÜFUNG ERFORDERLICH", panel.quality_label.text())
+            self.assertIn("Automatischer Export nicht freigegeben", panel.quality_label.text())
+            self.assertIn("Bildproben", panel.evidence_summary_label.text())
+            self.assertIn("Ungeprüft", panel.evidence_summary_label.text())
+            self.assertIn("Ohne Zuordnung", panel.evidence_summary_label.text())
+            self.assertIn("Lücke", panel.quality_label.toolTip())
+
+            for second, expected in ((4, "Bildprobe"), (13, "Ungeprüfter Bereich"),
+                                     (35, "Ohne Zuordnung")):
+                panel.timeline.set_position(second, emit=True)
+                self.assertIn(expected, panel.position_evidence_label.text())
+            self.assertFalse(result.safe_for_automatic_export)
+
+            panel.refresh({(master, source): alignment(manual=True)})
+            self.assertEqual(panel.timeline.position, 35)
+            self.assertIn("manuell bearbeitet", panel.position_evidence_label.text())
+            self.assertIn("Manuell", panel.quality_label.toolTip())
+
+            panel.reset()
+            self.assertIn("kein Bildabgleich", panel.position_evidence_label.text())
+            self.assertIn("erscheinen", panel.evidence_summary_label.text())
+            self.assertEqual(panel.quality_label.toolTip(), "")
+            app.processEvents()
+        finally:
+            panel.close()
+            panel.deleteLater()
+
     def test_selected_issue_jumps_without_authorizing_export(self):
         from PySide6.QtWidgets import QApplication
         from dubsync.gui.workbench import StudioReviewPanel

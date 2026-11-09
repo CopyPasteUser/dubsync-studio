@@ -31,8 +31,10 @@ They do not demonstrate a completed export or measured GPU performance.</sub>
 - **Picture-based alignment:** monotone frame matching, drift correction, and
   conservative synchronization across separately verified scene segments.
 - **Evidence you can inspect:** timeline markers, unverified-gap navigation,
-  reasons for blocked exports, optional frame comparisons and short A/B audio
-  waveforms. Audio previews never substitute for visual proof.
+  per-position labels for sampled, unverified and unmapped time, reasons for
+  missing automatic approval, optional frame comparisons and short A/B audio
+  waveforms. A passed picture check still requires the final export preflight;
+  audio previews never substitute for visual proof.
 - **Safe multilingual export:** copies the original video and existing tracks,
   optionally adds a switchable SRT subtitle track, verifies the completed MKV,
   and never silently overwrites or edits source files.
@@ -288,7 +290,7 @@ be reviewed for timing and correctness before permanent archiving. Batch jobs
 remember their subtitle recipe; one manually picked file or pasted video URL
 cannot accidentally be applied to an entire season.
 
-`Alt+1` Studio · `Alt+2` Queue · `Alt+3` Activity · `Ctrl+F` Episode search
+`Alt+1` Studio · `Alt+2` Queue · `Alt+3` Activity · `Alt+0` Focus comparison · `Ctrl+F` Episode search
 
 For hearing checks, **Hörprobe …** opens a bounded A/B player: choose a
 reference position and switch between **A · Bildmaster** and **B · Sprachfassung**.
