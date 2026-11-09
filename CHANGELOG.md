@@ -1,5 +1,11 @@
 # Unreleased · Headless workflow and resource safety (2026-11-09)
 
+- Extended the optional, dependency-free Rust engine with a bounded feature
+  candidate scan for difficult scene cuts. It preserves deterministic
+  Hamming-distance/tie ordering and conservative alignment rules, while old
+  native binaries and Python-only installs continue using NumPy automatically.
+  Native parity tests and a measured two-path benchmark now run in CI.
+
 - Added a standalone real-FFmpeg synthetic subtitle acceptance harness with
   JSON timing/stream metrics. It runs exports with/without optional SRT, checks
   the added track is switchable/non-default, verifies original inputs are

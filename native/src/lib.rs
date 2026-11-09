@@ -87,6 +87,65 @@ pub unsafe extern "C" fn dubsync_match(
     pairs.len() as isize
 }
 
+/// Find at most two closest targets for every source, ordered by (Hamming, target index).
+/// Writes triples `(source_index, target_index, distance)` to `output`.
+/// Returns the number of triples; negative values indicate invalid bounds/pointers.
+///
+/// # Safety
+/// All nonempty input arrays must be readable for their respective lengths.
+/// `output` must have room for at least `6 * source_len` u32 values. The
+/// caller must not alias writable output storage with either input array.
+#[no_mangle]
+pub unsafe extern "C" fn dubsync_feature_candidates(
+    source: *const u64,
+    source_len: usize,
+    target: *const u64,
+    target_len: usize,
+    output: *mut u32,
+    output_len: usize,
+) -> isize {
+    if source_len > MAX_SAMPLES || target_len > MAX_SAMPLES {
+        return -1;
+    }
+    if source_len == 0 || target_len == 0 {
+        return 0;
+    }
+    if source.is_null() || target.is_null() || output.is_null() || output_len < 6 * source_len {
+        return -1;
+    }
+    let sources = std::slice::from_raw_parts(source, source_len);
+    let targets = std::slice::from_raw_parts(target, target_len);
+    let out = std::slice::from_raw_parts_mut(output, output_len);
+    let mut count = 0usize;
+    for (source_index, &source_hash) in sources.iter().enumerate() {
+        let mut first = (17u32, usize::MAX);
+        let mut second = first;
+        for (target_index, &target_hash) in targets.iter().enumerate() {
+            let distance = (source_hash ^ target_hash).count_ones();
+            if distance > 16 {
+                continue;
+            }
+            let candidate = (distance, target_index);
+            if candidate < first {
+                second = first;
+                first = candidate;
+            } else if candidate < second {
+                second = candidate;
+            }
+        }
+        for (distance, target_index) in [first, second] {
+            if target_index != usize::MAX {
+                let position = count * 3;
+                out[position] = source_index as u32;
+                out[position + 1] = target_index as u32;
+                out[position + 2] = distance;
+                count += 1;
+            }
+        }
+    }
+    count as isize
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,6 +176,41 @@ mod tests {
         }, -1);
         assert_eq!(unsafe {
             dubsync_match(std::ptr::null(), 0, std::ptr::null(), 0, std::ptr::null_mut(), 0)
+        }, 0);
+    }
+
+    #[test]
+    fn candidate_scan_prefers_distance_then_earliest_target() {
+        let source = [0u64, 7u64, u64::MAX];
+        let target = [1u64, 0u64, 0u64, 7u64];
+        let mut output = [999u32; 18];
+        let count = unsafe {
+            dubsync_feature_candidates(source.as_ptr(), 3, target.as_ptr(), 4,
+                                       output.as_mut_ptr(), output.len())
+        };
+        assert_eq!(count, 4);
+        assert_eq!(&output[..12], &[0, 1, 0, 0, 2, 0, 1, 3, 0, 1, 0, 2]);
+    }
+
+    #[test]
+    fn candidate_scan_rejects_invalid_buffers() {
+        let source = [0u64];
+        let mut output = [0u32; 6];
+        assert_eq!(unsafe {
+            dubsync_feature_candidates(source.as_ptr(), 5_001, source.as_ptr(), 1,
+                                       output.as_mut_ptr(), output.len())
+        }, -1);
+        assert_eq!(unsafe {
+            dubsync_feature_candidates(std::ptr::null(), 1, source.as_ptr(), 1,
+                                       output.as_mut_ptr(), output.len())
+        }, -1);
+        assert_eq!(unsafe {
+            dubsync_feature_candidates(source.as_ptr(), 1, source.as_ptr(), 1,
+                                       output.as_mut_ptr(), 5)
+        }, -1);
+        assert_eq!(unsafe {
+            dubsync_feature_candidates(std::ptr::null(), 0, std::ptr::null(), 0,
+                                       std::ptr::null_mut(), 0)
         }, 0);
     }
 }

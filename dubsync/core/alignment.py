@@ -25,7 +25,7 @@ from .ffmpeg_sampling import (SamplingBackendError, ffmpeg_sample,
                               choose_verified_decoder)
 from .frame_cache import FrameSampleCache, source_identity
 from .network import is_network_path
-from .native_match import native_pairs
+from .native_match import native_feature_candidates, native_pairs
 from .performance import sampling_worker_policy, system_specs
 
 Progress = Callable[[str, int, int], None]
@@ -599,9 +599,19 @@ def _feature_candidate_pairs(source: list[FrameSample], target: list[FrameSample
                              cancel_event=None) -> list[tuple[int, int, int, float, float]]:
     """Find the same two strongest visual matches per source frame as the scalar path.
 
-    Each vector is only as wide as the target sample list; no quadratic matrix
-    is retained in memory. Equal distances still prefer the earlier target.
+    Rust avoids NumPy array allocations on each source when available; the
+    vector fallback holds one target-width row. Equal distances prefer the
+    earlier target in either backend.
     """
+    if cancel_event is not None and cancel_event.is_set():
+        raise AlignmentError("Frameabgleich abgebrochen.")
+    native = native_feature_candidates([sample.phash for sample in source],
+                                       [sample.phash for sample in target])
+    if native is not None:
+        if cancel_event is not None and cancel_event.is_set():
+            raise AlignmentError("Frameabgleich abgebrochen.")
+        return [(si, ti, distance, source[si].time, target[ti].time)
+                for si, ti, distance in native]
     target_hashes = np.asarray([sample.phash for sample in target], dtype=np.uint64)
     target_times = [sample.time for sample in target]
     candidates: list[tuple[int, int, int, float, float]] = []

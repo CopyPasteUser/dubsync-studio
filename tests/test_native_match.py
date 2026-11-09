@@ -6,8 +6,25 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from dubsync.core.alignment import AlignmentError, FrameSample, _sequence_alignment
-from dubsync.core.native_match import _library, native_pairs
+from dubsync.core.alignment import (AlignmentError, FrameSample,
+                                   _feature_candidate_pairs, _sequence_alignment)
+from dubsync.core.native_match import _library, native_feature_candidates, native_pairs
+
+
+def scalar_candidates(source, target):
+    matches = []
+    for si, src in enumerate(source):
+        distances = sorted(((src.phash ^ tgt.phash).bit_count(), ti)
+                           for ti, tgt in enumerate(target))
+        for distance, ti in [row for row in distances if row[0] <= 16][:2]:
+            matches.append((si, ti, distance, src.time, target[ti].time))
+    return matches
+
+
+class NativeBridgeCompatibilityTests(unittest.TestCase):
+    def test_old_rust_binary_without_optional_candidate_symbol_falls_back(self):
+        with patch("dubsync.core.native_match._library", return_value=object()):
+            self.assertIsNone(native_feature_candidates([0], [0]))
 
 
 @unittest.skipUnless(_library() is not None, "Optional Rust library not built")
@@ -42,6 +59,38 @@ class RustMatchingTests(unittest.TestCase):
         cancelled.set()
         with self.assertRaises(AlignmentError):
             _sequence_alignment([FrameSample(0., 0)], [FrameSample(0., 0)], cancel_event=cancelled)
+
+
+@unittest.skipUnless(_library() is not None and
+                     hasattr(_library(), "dubsync_feature_candidates"),
+                     "Optional Rust feature candidate extension not built")
+class RustFeatureCandidateTests(unittest.TestCase):
+    def test_rust_matches_reference_with_repeats_sparse_matches_and_full_width_hashes(self):
+        rng = random.Random(40191)
+        for case in range(75):
+            src_hashes = [rng.getrandbits(64) for _ in range(rng.randrange(0, 55))]
+            if src_hashes and case % 3 == 0:
+                src_hashes[::5] = [0] * len(src_hashes[::5])
+            tgt_hashes = src_hashes.copy()
+            if case % 2 == 0:
+                tgt_hashes = [rng.getrandbits(64) for _ in range(10)] + tgt_hashes
+            if case % 3 == 0:
+                tgt_hashes.extend([src_hashes[0]] * 3 if src_hashes else [])
+            source = [FrameSample(i * .75, h) for i, h in enumerate(src_hashes)]
+            target = [FrameSample(i * .9, h) for i, h in enumerate(tgt_hashes)]
+            with self.subTest(case=case):
+                self.assertEqual(_feature_candidate_pairs(source, target),
+                                 scalar_candidates(source, target))
+                self.assertEqual(native_feature_candidates(src_hashes, tgt_hashes),
+                                 [(si, ti, dist) for si, ti, dist, *_ in
+                                  scalar_candidates(source, target)])
+
+    def test_invalid_inputs_rejected_without_disabling_old_engine(self):
+        self.assertIsNone(native_feature_candidates([-1], [0]))
+        self.assertIsNone(native_feature_candidates([2**64], [0]))
+        self.assertIsNone(native_feature_candidates([0] * 5001, [0]))
+        self.assertEqual(native_feature_candidates([], [0]), [])
+        self.assertIsNotNone(native_pairs([0], [0]))
 
 
 if __name__ == "__main__":

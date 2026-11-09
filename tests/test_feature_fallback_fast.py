@@ -4,6 +4,7 @@ from __future__ import annotations
 import random
 import threading
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -89,6 +90,35 @@ def scalar_feature_fallback(source, target, interval):
 
 
 class FastFeatureFallbackTests(unittest.TestCase):
+    def test_native_candidates_are_mapped_to_frame_timestamps(self):
+        source = [FrameSample(1.5, 0), FrameSample(4.5, 3)]
+        target = [FrameSample(2.0, 0), FrameSample(7.0, 3)]
+        with patch("dubsync.core.alignment.native_feature_candidates",
+                   return_value=[(0, 0, 0), (1, 1, 0)]) as native:
+            result = _feature_candidate_pairs(source, target)
+        self.assertEqual(result, [(0, 0, 0, 1.5, 2.0), (1, 1, 0, 4.5, 7.0)])
+        native.assert_called_once_with([0, 3], [0, 3])
+
+    def test_missing_native_extension_uses_numpy(self):
+        source = [FrameSample(0.0, 0), FrameSample(1.0, 15)]
+        target = [FrameSample(3.0, 15), FrameSample(4.0, 0)]
+        with patch("dubsync.core.alignment.native_feature_candidates", return_value=None):
+            self.assertEqual(_feature_candidate_pairs(source, target),
+                             scalar_candidates(source, target))
+
+    def test_cancellation_after_native_scan_is_respected(self):
+        event = threading.Event()
+        samples = [FrameSample(0.0, 0)]
+
+        def cancel_during_scan(*_args):
+            event.set()
+            return [(0, 0, 0)]
+
+        with patch("dubsync.core.alignment.native_feature_candidates",
+                   side_effect=cancel_during_scan):
+            with self.assertRaises(AlignmentError):
+                _feature_candidate_pairs(samples, samples, event)
+
     def test_vector_candidates_match_scalar_with_repeats_and_near_collisions(self):
         randomizer = random.Random(7012026)
         for case in range(32):
