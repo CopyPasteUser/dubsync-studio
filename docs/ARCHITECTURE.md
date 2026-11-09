@@ -16,6 +16,7 @@ DubSync Studio separates Qt presentation from media processing:
 - `native/src/lib.rs` and `dubsync/core/native_match.py`: optional Rust implementation of the monotone frame dynamic-programming core, loaded through stdlib `ctypes`. A version-checked shared library is used when available; NumPy remains the fallback, with the same evidence and export gates.
 - `dubsync/core/piecewise.py`: independently validated monotone cut segments when one global affine map fails; unverified regions are never extrapolated as matching scenes.
 - `dubsync/core/ffmpeg_sampling.py`: bounded FFmpeg 32×32 grayscale frame extraction, optional hardware decode, per-file CPU/GPU speed and fingerprint comparison; always keeps a CPU fallback.
+- `dubsync/core/thread_benchmark.py`: read-only repeated CPU FFmpeg thread comparison with exact sample-hash equality and a conservative recommendation threshold. Never changes settings or reads NAS files through the CLI.
 - `dubsync/core/frame_cache.py`: bounded SQLite pHash/time sample cache, protected by fresh, distributed file-content/metadata checks; has no alignment/export decision state.
 - `dubsync/core/export.py`: FFmpeg filter graph, audio adjustment, metadata, atomic output replacement, and output verification.
 - `dubsync/core/batch.py`: single-folder/season/series batch orchestration, output planning, storage-space preflight, skip-existing behavior and fresh episode/identity validation. The result cache is disabled during batch export.

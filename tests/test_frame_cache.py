@@ -89,6 +89,7 @@ class FrameCacheTests(unittest.TestCase):
         identity = source_identity(str(self.file))
         cache = FrameSampleCache(self.db)
         self.assertTrue(cache.put(identity, 12, 1., self.samples, "auto"))
+        self.assertTrue(cache.put(identity, 12, 1., self.samples, "auto-ffmpeg-v2"))
         updated = [FrameSample(stamp, hash_value ^ 0xFFFF)
                    for stamp, hash_value in self.samples]
         with mock.patch("dubsync.core.alignment.sample_video", return_value=updated) as decode:
@@ -102,6 +103,20 @@ class FrameCacheTests(unittest.TestCase):
             self.assertEqual(cached, updated)
             decode.assert_not_called()
 
+    def test_old_explicit_ffmpeg_fingerprints_are_not_reused_after_filter_reordering(self):
+        identity = source_identity(str(self.file))
+        cache = FrameSampleCache(self.db)
+        self.assertTrue(cache.put(identity, 12, 1., self.samples, "ffmpeg"))
+        newer = [FrameSample(stamp, hash_value ^ 0xF0F0)
+                 for stamp, hash_value in self.samples]
+        with mock.patch("dubsync.core.alignment.sample_video", return_value=newer) as decode:
+            actual = _sample_with_cache(str(self.file), 12, 1., None, "Quellvideo",
+                                        None, "ffmpeg", None, cache)
+        self.assertEqual(actual, newer)
+        decode.assert_called_once()
+        self.assertEqual(cache.get(identity, 12, 1., "ffmpeg-scale-first-v2"),
+                         [(item.time, item.phash) for item in newer])
+
     def test_opencv_fallback_does_not_poison_auto_ffmpeg_cache(self):
         cache = FrameSampleCache(self.db)
         generated = [FrameSample(stamp, value) for stamp, value in self.samples]
@@ -114,7 +129,7 @@ class FrameCacheTests(unittest.TestCase):
         with mock.patch("dubsync.core.alignment.sample_video", side_effect=fallback):
             self.assertEqual(_sample_with_cache(str(self.file), 12, 1., None, "Quellvideo",
                                                  None, "auto", diagnostic, cache), generated)
-        self.assertIsNone(cache.get(source_identity(str(self.file)), 12, 1., "auto-ffmpeg-v2"))
+        self.assertIsNone(cache.get(source_identity(str(self.file)), 12, 1., "auto-ffmpeg-v3"))
         self.assertFalse(diagnostic.payload["stages"]["sample_cache_source"]["stored"])
 
     def test_explicit_opencv_mode_keeps_its_cache(self):

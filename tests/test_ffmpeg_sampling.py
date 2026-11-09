@@ -300,6 +300,15 @@ class FFmpegSamplingTests(unittest.TestCase):
             command = _capture_command("movie.mkv", 1, 10, None, None, decode_threads=3)
         self.assertEqual(command[command.index("-threads") + 1], "3")
 
+    def test_native_filter_scales_before_grayscale(self):
+        with (mock.patch("dubsync.core.ffmpeg_sampling.shutil.which", return_value="/usr/bin/ffmpeg"),
+              mock.patch("dubsync.core.ffmpeg_sampling.ffmpeg_hardware_accels",
+                         return_value=frozenset())):
+            command = _capture_command("movie.mkv", 1., 20, None, None)
+        chain = command[command.index("-vf") + 1]
+        self.assertIn("fps=fps=", chain)
+        self.assertIn("scale=32:32:flags=area,format=gray", chain)
+
 
 class AMDDeviceSelectionTests(unittest.TestCase):
     def test_amd_selection_prefers_correct_gpu_on_hybrid_system(self):

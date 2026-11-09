@@ -94,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scan-library", metavar="ORDNER", action="append",
                         help="Videobibliothek ohne GUI scannen; für mehrere Ordner wiederholen (kein Export).")
     parser.add_argument("--benchmark-decode", metavar="VIDEO", help="CPU/GPU-Dekodierleistung für ein lokales Video messen (nur lesend).")
+    parser.add_argument("--benchmark-threads", metavar="VIDEO",
+                        help="CPU-FFmpeg-Threadzahlen mit Fingerprint-Parität vergleichen (nur lokales Video, keine Änderungen).")
     parser.add_argument("--profile-alignment", nargs=2, metavar=("QUELLE", "MASTER"),
                         help="Vollständigen Bildabgleich und Laufzeiten für zwei Videos prüfen (kein Export).")
     parser.add_argument("--explore-episode", nargs="+", metavar="VIDEO",
@@ -114,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
     requested = (args.doctor, args.latest_alignment, args.list_alignments, args.latest_batch,
                  args.list_batches, args.queue_status, bool(args.scan_library),
                  args.benchmark_decode, args.profile_alignment, args.explore_episode,
-                 args.benchmark_workers)
+                 args.benchmark_workers, args.benchmark_threads)
     if args.json and not any(requested):
         parser.error("--json erfordert eine Diagnoseoption.")
     if sum(bool(value) for value in requested) > 1:
@@ -212,6 +214,38 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Empfehlung: {report['suggested_workers']} Decoder · {report['note']}")
             print("Nur Benchmark – keine automatische Profiländerung oder Exportfreigabe.")
         return 0 if report["visual_anchor_parity"] and report["safety_decision_parity"] else 1
+    if args.benchmark_threads:
+        from dubsync.core.thread_benchmark import compare_cpu_decode_threads
+        from dubsync.core.network import is_network_path
+        from dubsync.core.probe import probe_media
+        source = Path(args.benchmark_threads).expanduser().resolve()
+        if not source.is_file() or is_network_path(str(source)):
+            print("Bitte eine lokale, lesbare Videodatei wählen (kein NAS).", file=sys.stderr)
+            return 2
+        if not 3 <= args.benchmark_seconds <= 120:
+            parser.error("--benchmark-seconds muss für Threadtests zwischen 3 und 120 liegen.")
+        try:
+            media = probe_media(str(source))
+            report = compare_cpu_decode_threads(str(source), media.duration,
+                                                seconds=args.benchmark_seconds)
+        except (OSError, ValueError, RuntimeError) as exc:
+            print(f"CPU-Decodervergleich fehlgeschlagen: {exc}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print(f"CPU-Decodervergleich: {source.name} ({report['tested_seconds']:g} s Ausschnitt)")
+            for run in report["runs"]:
+                label = run["label"]
+                if run["exact_frame_parity"]:
+                    print(f"  {label}: {run['median_seconds']:.3f} s · "
+                          f"{run['speedup_vs_default']:.2f}× gegenüber Standard")
+                else:
+                    print(f"  {label}: fehlgeschlagen oder abweichende Fingerprints")
+            suggested = report["recommended_threads"]
+            print(f"Empfehlung: {suggested if suggested is not None else 'Standard'} Threads")
+            print("Reiner Benchmark; Einstellungen wurden nicht verändert.")
+        return 0
     if args.profile_alignment:
         from dubsync.core.alignment import align_videos
         from dubsync.core.alignment_diagnostics import summarize_diagnostic

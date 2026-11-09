@@ -385,10 +385,13 @@ def _sample_with_cache(path: str, duration: float, interval: float,
                        video_codec: str | None = None) -> list[FrameSample]:
     """Reuse only frame hashes; always rerun identity checks and alignment."""
     identity = None
-    # Previous automatic runs stored OpenCV fingerprints under "auto". FFmpeg
-    # CPU uses a different color conversion; never mix those old cached hashes
-    # with new automatic CPU/GPU streams during conservative Hamming matching.
-    cache_mode = "auto-ffmpeg-v2" if hardware_accel == "auto" else hardware_accel
+    # Old automatic entries could contain OpenCV or the former FFmpeg filter
+    # order. Scale-first grayscale has slightly different hash bits even when
+    # the same video is decoded, so reuse only caches from the same pipeline.
+    ffmpeg_modes = {"auto", "ffmpeg", "cuda", "vaapi", "amd-vaapi", "intel-vaapi", "d3d11"}
+    cache_mode = ("auto-ffmpeg-v3" if hardware_accel == "auto" else
+                  f"{hardware_accel}-scale-first-v2" if hardware_accel in ffmpeg_modes else
+                  hardware_accel)
     stage = "source" if side == "Quellvideo" else "master"
     if cache is not None:
         try:
