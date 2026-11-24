@@ -111,3 +111,61 @@ feature as finished. Broader MainWindow decomposition and additional visual
 fidelity/polish remain subject to the actual UI acceptance.
 
 All integration commits retain [skip ci]; no Actions run requested.
+
+
+## Follow-up export integration (2026-11-24)
+
+The production exporter, models, FFprobe parser and language module were
+reconstructed byte-for-byte in the restricted local workspace. The initial
+no-subtitle comparison used an explicitly disabled subtitle module; after
+the lazy options/backend split, all six production exporter tests ran
+without that stand-in. The entire repository and subtitle-enabled flow
+remain unverified here.
+
+A real 30-second, three-dub export with FFmpeg 7.1.5 reproduced an existing
+positive-delay timestamp discontinuity. Two of four original-main exports
+had 1,387 packets in the +500 ms track and a maximum gap of 0.458 s. Two
+other baseline runs had 1,409 packets and a 0.001 s maximum gap. After
+normalizing the sample clock immediately after the positive adelay, all
+three candidate runs had 1,409 packets and a 0.001 s maximum gap. Copied
+video, decoded PCM, per-stream packet timing and metadata exactly matched
+both continuous baseline references; every input SHA-256 was unchanged.
+The candidate median was 1.068 s, baseline median 1.253 s, but those are
+small synthetic samples including defective baseline outputs, not a
+production throughput claim. Piecewise filter timing and real source
+timestamp discontinuities still require full acceptance.
+
+The benchmark now records every original result, compares packet sequences
+per stream rather than arbitrary interleaving, and requires repeatable
+continuous candidate output. The acceptance comparator requires at least
+one continuous original reference and exact equality to all continuous
+original references. It fails explicitly if no valid reference exists.
+
+Additional changes:
+- Source alignment must match the selected source as well as master, even
+  for manual low-confidence exports.
+- Bounded progress-reader queue; cancellation is polled during silent or
+  partial progress output and after stdout EOF. Verified outputs are
+  promoted atomically without clobbering concurrent writers unless overwrite
+  is explicitly authorized. Linux renameat2 / POSIX hardlink fallback;
+  unsupported target filesystems fail closed. Physical SMB/NFS testing
+  remains required.
+- Cancel before publication preserves existing output; notification errors
+  after the commit point do not misreport a committed output as failed.
+- SubtitleOptions/SubtitleError are separated from acquisition code.
+  Existing subtitle imports remain compatible through re-exports; the
+  normal export path does not load acquisition backends.
+
+Final focused validation on the reconstructed subset, split into four runs
+because the combined process exceeded this environment's time limit:
+33 + 23 + 5 + 1 = **62 passed**, **97 subtests passed**. The full alignment
+pipeline benchmark was deselected; this is not a complete repository run.
+Six production exporter tests include real three-dub exports, source
+binding, late cancellation, concurrent output, import isolation and
+post-commit callback failure. No subtitle-enabled, Qt, Rust or target
+hardware acceptance is claimed.
+
+The direct GitHub/PyPI DNS check still fails, no Qt/Cargo packages are
+available in local caches, and no GitHub Actions were intentionally started.
+The merge/release status remains NO GO until the integrated checkout and
+physical gates are satisfied.
