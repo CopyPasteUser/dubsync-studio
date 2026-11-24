@@ -36,3 +36,12 @@ secondary pages, track component reuse and broader MainWindow controller
 extraction are pending. No visual macOS redesign yet. Full checkout and
 PySide6 are unavailable in this execution environment; no merge or actual
 Qt smoke claim. Keep S05 design changes separate.
+
+## Additional component extraction
+
+Move progress/residual plots and the source drag-and-drop list to independent
+modules. Keep their original definitions unchanged and re-export them via
+main_window for compatible imports. Static contracts now check their actual
+source files. MainWindow module falls from 5,502 to 5271 lines (line counts
+include the final split line). These moves improve ownership and prepare S05;
+no startup speedup is attributed to the relocation itself.
