@@ -1,20 +1,17 @@
 """Canonical Qt theme. DESIGN.md documents roles; all surfaces consume these tokens."""
 from string import Template
 
-TOKENS = {
-    "canvas": "#17191c", "surface": "#202327", "raised": "#292d32",
-    "border": "#424950", "text": "#eef0f2", "muted": "#adb5be",
-    "accent": "#a8dfd3", "ink": "#142c29", "selection": "#344d49",
-    "warning": "#efc586", "danger": "#f2a5a5", "success": "#a8dfb2",
-    "thumb": "#68747e", "hover": "#363d43", "disabled": "#858c94",
-}
+from dubsync.gui.appearance import appearance_colors
+
+TOKENS = appearance_colors()
 
 
-def studio_stylesheet(high_contrast: bool = False) -> str:
-    colors = dict(TOKENS)
-    if high_contrast:
-        colors.update(canvas="#080a0b", surface="#111416", border="#adb5be",
-                      text="#ffffff", muted="#e2e6ea", thumb="#adb5be")
+def apply_appearance(appearance: object, high_contrast: bool = False) -> None:
+    TOKENS.update(appearance_colors(appearance, high_contrast))
+
+
+def studio_stylesheet(high_contrast: bool = False, *, appearance: object = "light") -> str:
+    colors = appearance_colors(appearance, high_contrast)
     return Template('''
     QWidget { color: $text; font-family: "Noto Sans", "Segoe UI", sans-serif; font-size: 13px; }
     QMainWindow, QDialog { background: $canvas; }
@@ -26,12 +23,18 @@ def studio_stylesheet(high_contrast: bool = False) -> str:
     QLabel#reviewVerdict { background: $raised; border-left: 3px solid $border; border-radius: 4px; color: $muted; padding: 8px 9px; }
     QLabel#reviewVerdict[state="safe"] { border-left-color: $success; color: $text; }
     QLabel#reviewVerdict[state="unsafe"] { border-left-color: $warning; color: $warning; }
-    QFrame#navigation, QFrame#jobDock { background: $surface; border: 1px solid $border; border-radius: 8px; }
+    QFrame#navigation { background: $surface; border: none; border-bottom: 1px solid $border; }
+    QFrame#jobDock { background: $surface; border: none; border-top: 1px solid $border; }
+    QFrame#librarySidebar { background: $surface; border: none; border-right: 1px solid $border; }
+    QFrame#trackInspector { background: $surface; border: none; border-left: 1px solid $border; }
+    QFrame#reviewPanel { background: $canvas; border: none; }
+    QTableWidget#episodeLibrary { border: none; border-radius: 0; }
+    QFrame#librarySidebar QStackedWidget { background: $surface; }
     QFrame#workflowStrip { background: $surface; border: none; border-radius: 8px; }
     QFrame#sourceRow { background: $surface; border: 1px solid $border; border-left: 3px solid $accent; border-radius: 6px; }
     QFrame#pageHeader { background: transparent; border: none; }
-    #brandTitle { font-size: 21px; font-weight: 700; }
-    #pageTitle { font-size: 23px; font-weight: 700; }
+    #brandTitle { font-size: 17px; font-weight: 650; }
+    #pageTitle { font-size: 20px; font-weight: 650; }
     #sectionTitle { font-size: 16px; font-weight: 650; }
     #heroNumber { font-size: 26px; font-weight: 650; }
     #sourceName { font-weight: 650; }
@@ -47,12 +50,12 @@ def studio_stylesheet(high_contrast: bool = False) -> str:
     QPushButton:hover, QToolButton:hover { background: $hover; border-color: $muted; }
     QPushButton:pressed, QToolButton:pressed { background: $selection; }
     QPushButton#primaryButton { background: $accent; color: $ink; border-color: $accent; font-weight: 650; }
-    QPushButton#primaryButton:hover { background: $text; border-color: $text; }
-    QPushButton#primaryButton:pressed { background: $muted; }
+    QPushButton#primaryButton:hover { background: $accent; border-color: $text; }
+    QPushButton#primaryButton:pressed { background: $accent; border-color: $ink; }
     QPushButton#navButton { background: transparent; border-color: transparent; color: $muted; }
     QPushButton#navButton:hover { background: $raised; color: $text; }
-    QPushButton#navButton:checked { background: $selection; color: $text; border-bottom: 2px solid $accent; }
-    QPushButton#viewToggleButton:checked { background: $selection; color: $accent; border-color: $accent; }
+    QPushButton#navButton:checked { background: $selection; color: $text; border-color: $selection; }
+    QPushButton#viewToggleButton:checked { background: $selection; color: $text; border-color: $accent; }
     QPushButton#cancelButton:enabled { color: $danger; border-color: $danger; background: transparent; }
     QPushButton#cancelButton:enabled:hover { background: $raised; }
     QPushButton:disabled, QPushButton#primaryButton:disabled, QPushButton#secondaryButton:disabled, QToolButton:disabled { background: $surface; color: $disabled; border-color: $border; }
