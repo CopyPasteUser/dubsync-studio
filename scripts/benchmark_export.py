@@ -35,12 +35,22 @@ def stream_hash(ffmpeg: str, path: Path, stream: str, codec_args: list[str]) -> 
     return value
 
 
+def packet_timing_sha256(ffprobe: str, path: Path) -> str:
+    # Synthetic benchmark only: compare packet timestamps as well as PCM.
+    output = subprocess.check_output([ffprobe, "-v", "error", "-show_packets",
+        "-show_entries", "packet=stream_index,pts_time,dts_time,duration_time",
+        "-of", "compact=p=0:nk=0", str(path)], timeout=180)
+    if not output.strip():
+        raise RuntimeError("Missing packet timing evidence")
+    return hashlib.sha256(output).hexdigest()
+
+
 def benchmark(root: Path, duration: int, repeats: int) -> dict:
     from dubsync.core.export import export_multilingual
     from dubsync.core.models import AlignmentResult, Anchor, TrackChoice
     from dubsync.core.probe import probe_media, require_media_tools
 
-    ffmpeg, _ = require_media_tools()
+    ffmpeg, ffprobe = require_media_tools()
     master = root / "master.mkv"
     base = [ffmpeg, "-nostdin", "-v", "error", "-y"]
     subprocess.run(base + ["-f", "lavfi", "-i", f"testsrc2=size=160x90:rate=12:duration={duration}",
@@ -79,6 +89,8 @@ def benchmark(root: Path, duration: int, repeats: int) -> dict:
         evidence = {"video": stream_hash(ffmpeg, output, "0:v:0", ["-c:v", "copy"]),
                     "audio": [stream_hash(ffmpeg, output, f"0:a:{j}", ["-c:a", "pcm_s16le"])
                               for j in range(info.audio_streams)],
+                    "packet_timing_sha256": packet_timing_sha256(ffprobe, output),
+                    "duration_s": info.duration,
                     "audio_streams": [{"codec": a.codec_name, "channels": a.channels,
                                        "sample_rate": a.sample_rate, "language": a.language} for a in info.audio]}
         if evidence["video"] != reference_video or len(evidence["audio"]) != 4:
