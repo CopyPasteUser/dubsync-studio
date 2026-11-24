@@ -100,7 +100,7 @@ class GuiContractTests(unittest.TestCase):
         self.assertIn('Metadaten-Worker', self.text)
 
     def test_residual_visualization_sync_preview_and_undo_redo(self):
-        self.assertIn('class AlignmentResidualPlot(QWidget)', self.text)
+        self.assertIn('class AlignmentResidualPlot(QWidget)', (ROOT / 'dubsync/gui/plots.py').read_text(encoding='utf-8'))
         self.assertIn('class SyncPreviewDialog(QDialog)', self.text)
         self.assertIn('def preview_sync_audio(self)', self.text)
         self.assertIn('def undo_alignment(self)', self.text)
@@ -128,14 +128,14 @@ class GuiContractTests(unittest.TestCase):
 
 
     def test_pause_resume_and_progress_plot_are_connected(self):
-        self.assertIn("class ProgressHistoryPlot(QWidget)", self.text)
+        self.assertIn("class ProgressHistoryPlot(QWidget)", (ROOT / "dubsync/gui/plots.py").read_text(encoding="utf-8"))
         self.assertIn("def toggle_pause_current_job(self)", self.text)
         self.assertIn("self.pause_button.clicked.connect(self.toggle_pause_current_job)", self.text)
-        self.assertIn("self.pause_event = threading.Event()", self.text)
+        self.assertIn("self.pause_event = threading.Event()", (ROOT / "dubsync/gui/task_worker.py").read_text(encoding="utf-8"))
         self.assertIn("def test_batch_rejects_duplicate_output_destinations_before_any_probe", (ROOT / "tests" / "test_core.py").read_text(encoding="utf-8"))
 
     def test_workflow_design_and_drag_drop_are_wired(self):
-        self.assertIn('class SourceDropList(QListWidget)', self.text)
+        self.assertIn('class SourceDropList(QListWidget)', (ROOT / 'dubsync/gui/source_list.py').read_text(encoding='utf-8'))
         self.assertIn('self.root_list.pathsDropped.connect(self._handle_dropped_paths)', self.text)
         self.assertIn('QLabel("QUELLEN")', self.text)
         self.assertIn('QLabel("ABGLEICH")', self.text)

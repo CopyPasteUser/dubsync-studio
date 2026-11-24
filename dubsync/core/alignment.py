@@ -178,7 +178,8 @@ def sample_video(path: str, duration: float, interval: float = 0.5,
                     benchmark = benchmark_decoder_candidates(
                         path, duration, interval, perceptual_hash,
                         candidates=measured_candidates, cancel_event=cancel_event,
-                        seconds=probe_seconds, probe_starts=probe_starts)
+                        seconds=probe_seconds, probe_starts=probe_starts,
+                        decode_threads=decode_threads)
                     gpu_probe_seconds = time.monotonic() - probe_started
                     winner = choose_verified_decoder(benchmark, measured_candidates)
                     if winner is not None:
@@ -477,6 +478,7 @@ def _sample_video_pair(source_path: str, target_path: str,
                        frame_cache_enabled: bool, requested_workers: int,
                        source_codec: str | None = None, target_codec: str | None = None,
                        cpu_threads: int | None = None,
+                       master_sample_cache: FrameSampleCache | None = None,
                        ) -> tuple[list[FrameSample], list[FrameSample]]:
     """Read independent sources concurrently only when the resource policy permits."""
     specs = system_specs()
@@ -490,7 +492,9 @@ def _sample_video_pair(source_path: str, target_path: str,
              ("master", target_path, target_duration, "Referenzvideo", target_codec))
     # Initialize SQLite schema serially; concurrent initialization may briefly
     # lock the database even though subsequent per-worker connections are safe.
-    caches = {key: FrameSampleCache() for key, *_ in tasks} if frame_cache_enabled else {}
+    caches = ({"source": FrameSampleCache(),
+               "master": master_sample_cache if master_sample_cache is not None else FrameSampleCache()}
+              if frame_cache_enabled else {})
     results: dict[str, list[FrameSample]] = {}
     timings: dict[str, float] = {}
     local_stop = threading.Event()
@@ -1257,7 +1261,8 @@ def _align_videos_impl(source_path: str, target_path: str, interval: float = 0.5
                  diagnostic: AlignmentDiagnostic | None = None,
                  frame_cache_enabled: bool = True,
                  sampling_workers: int = 1,
-                 cpu_threads: int | None = None) -> AlignmentResult:
+                 cpu_threads: int | None = None,
+                 master_sample_cache: FrameSampleCache | None = None) -> AlignmentResult:
     """Map source video time to target/master video time using perceptual frame alignment.
 
     Callers running a batch may pass already-probed metadata to avoid launching
@@ -1302,7 +1307,7 @@ def _align_videos_impl(source_path: str, target_path: str, interval: float = 0.5
         effective_interval, progress, cancel_event, hardware_accel, diagnostic,
         frame_cache_enabled, sampling_workers,
         source_info.video[0].codec_name, target_info.video[0].codec_name,
-        cpu_threads,
+        cpu_threads, master_sample_cache,
     )
     # First test for the common case: same episode/video timeline, different audio
     # track or re-encode. A same-timestamp visual check is both faster and more
@@ -1439,7 +1444,8 @@ def align_videos(source_path: str, target_path: str, interval: float = 0.5,
                  diagnostic_sink=None,
                  frame_cache_enabled: bool = True,
                  sampling_workers: int = 1,
-                 cpu_threads: int | None = None) -> AlignmentResult:
+                 cpu_threads: int | None = None,
+                 master_sample_cache: FrameSampleCache | None = None) -> AlignmentResult:
     """Run visual alignment and always persist bounded per-pair diagnostics.
 
     The diagnostic reporter cannot change the computed result or turn an unsafe
@@ -1460,7 +1466,7 @@ def align_videos(source_path: str, target_path: str, interval: float = 0.5,
         result = _align_videos_impl(
             source_path, target_path, interval, progress, cancel_event,
             max_samples, hardware_accel, source_info, target_info, diagnostic,
-            frame_cache_enabled, sampling_workers, cpu_threads,
+            frame_cache_enabled, sampling_workers, cpu_threads, master_sample_cache,
         )
         selected = next((event["method"] for event in diagnostic.payload["events"]
                          if event.get("event") == "method_selected"), "unknown")

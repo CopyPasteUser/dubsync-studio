@@ -21,6 +21,7 @@ class FreshSessionTests(unittest.TestCase):
             "skip_existing": True,
             "performance": {"max_samples": 1200},
             "high_contrast": True,
+            "appearance": "dark",
             "output_directory": "/mnt/output",
             "organize_output": False,
             "subtitle_mode": "sidecar",
@@ -33,6 +34,7 @@ class FreshSessionTests(unittest.TestCase):
         self.assertFalse(result["organize_output"])
         self.assertEqual(result["performance"], {"max_samples": 1200})
         self.assertTrue(result["high_contrast"])
+        self.assertEqual(result["appearance"], "dark")
         self.assertEqual(result["subtitle_mode"], "sidecar")
         self.assertEqual(result["subtitle_language"], "deu")
         self.assertEqual(result["subtitle_model"], "small")

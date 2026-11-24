@@ -79,6 +79,24 @@ class ReviewWorkbenchTests(unittest.TestCase):
             panel.close()
             panel.deleteLater()
 
+    def test_timeline_reuses_index_on_cursor_moves_and_rebuilds_on_new_data(self):
+        timeline = AlignmentTimeline()
+        try:
+            timeline.set_data(110, self.result())
+            index = timeline._index
+            timeline.set_position(20)
+            timeline.set_zoom(4)
+            timeline.show()
+            self.app.processEvents()
+            self.assertIs(timeline._index, index)
+            self.assertTrue(index.anchor_times)
+            timeline.set_data(110, None)
+            self.assertIsNot(timeline._index, index)
+            self.assertEqual(timeline._index.anchor_times, ())
+        finally:
+            timeline.close()
+            timeline.deleteLater()
+
     def test_timeline_clamps_cursor_and_zoom_and_supports_keyboard(self):
         timeline = AlignmentTimeline()
         try:

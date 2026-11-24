@@ -246,3 +246,71 @@ def test_busy_and_error_feedback_keep_recovery_accessible(window):
     assert window.insight_panel.property('state') == 'error'
     window._set_controls_enabled(True)
     assert window.scan_button.isEnabled()
+
+
+def test_inspector_toggle_keeps_editor_and_focus_state(window):
+    splitter = window.studio_splitter
+    editor = splitter.widget(2)
+    window.inspector_toggle.click()
+    assert editor.isHidden()
+    assert not splitter.widget(0).isHidden()
+    window.review_focus_button.click()
+    assert not window.inspector_toggle.isEnabled()
+    window.review_focus_button.click()
+    assert editor.isHidden()
+    window.inspector_toggle.click()
+    assert splitter.widget(2) is editor and not editor.isHidden()
+
+
+def test_appearance_change_is_not_project_edit(window):
+    from dubsync.gui.theme import TOKENS
+    from dubsync.gui.appearance import appearance_colors
+    from dubsync.gui.main_window import load_settings
+    dirty = window.project_dirty
+    window._set_appearance("dark")
+    assert window.settings["appearance"] == "dark"
+    assert load_settings()["appearance"] == "dark"
+    assert TOKENS == appearance_colors("dark", bool(window.settings.get("high_contrast")))
+    assert window.project_dirty == dirty
+    window._set_appearance("light")
+    assert load_settings()["appearance"] == "light"
+    assert window.project_dirty == dirty
+
+
+def test_inspector_filter_is_display_only_and_rebuild_cleans_radio_group(window):
+    group = EpisodeGroup("sample", "Synthetic", ["/tmp/master.mkv", "/tmp/dub.mkv"])
+    window.selected_group = group
+    window.media_cache = {
+        path: MediaInfo(path, 120, "matroska", 1000 + i,
+                        [StreamInfo(0, "video", codec_name="h264"),
+                         StreamInfo(1, "audio", language="eng", channels=2)],
+                        1, 1, 0)
+        for i, path in enumerate(group.files)
+    }
+    window._render_group(group)
+    original = window._master_radio_group
+    active = list(window._active_track_rows())
+    window.inspector_track_filter.setCurrentIndex(
+        window.inspector_track_filter.findData(group.files[1]))
+    assert window.source_rows[group.files[0]].isHidden()
+    assert not window.source_rows[group.files[1]].isHidden()
+    assert list(window._active_track_rows()) == active
+    window._render_group(group)
+    assert window._master_radio_group is not original
+    assert window.inspector_track_filter.currentData() == group.files[1]
+    window.inspector_track_filter.setCurrentIndex(0)
+    assert all(not row.isHidden() for row in window.source_rows.values())
+
+
+def test_queue_view_loads_only_on_navigation(window, monkeypatch):
+    if window.batch_queue is None:
+        pytest.fail("Private test queue is unavailable")
+    calls = []
+    monkeypatch.setattr(window.batch_queue, "recent", lambda limit: calls.append(limit) or [])
+    window._navigate_to(0)
+    window._refresh_inline_queue()
+    window._navigate_to(2)
+    window._refresh_inline_queue()
+    assert calls == []
+    window._navigate_to(1)
+    assert calls == [100]

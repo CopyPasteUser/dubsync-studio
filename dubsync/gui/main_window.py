@@ -17,8 +17,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Any
 
-from PySide6.QtCore import Qt, QThread, Signal, QSettings, QSize, QTimer, QUrl, QPointF, QRectF
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QDesktopServices, QPainter, QPen, QBrush
+from PySide6.QtCore import Qt, QThread, Signal, QSettings, QSize, QTimer, QUrl
+from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QIcon, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLayout, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QFileDialog, QListWidget, QListWidgetItem,
@@ -29,7 +29,11 @@ from PySide6.QtWidgets import (
     QButtonGroup, QSizePolicy, QDialog, QDialogButtonBox, QSpinBox, QInputDialog, QMenu,
 )
 
-from dubsync.gui.theme import studio_stylesheet
+from dubsync.gui.theme import apply_appearance, studio_stylesheet
+from dubsync.gui.appearance import normalize_appearance
+from dubsync.gui.task_worker import NamedCancelEvent, TaskWorker
+from dubsync.gui.plots import ProgressHistoryPlot, AlignmentResidualPlot
+from dubsync.gui.source_list import SourceDropList
 from dubsync.gui.workbench import StudioReviewPanel
 from dubsync.gui.episode_explorer import EpisodeExplorerDialog
 from dubsync.core.episode_assignment import approved_candidate_path, apply_candidate_assignments
@@ -46,7 +50,7 @@ from dubsync.core.cache import AlignmentCache
 from dubsync.core.session import persistent_preferences
 from dubsync.core.export import ExportError, export_multilingual
 from dubsync.core.export_preflight import inspect_single_export
-from dubsync.core.subtitles import SubtitleOptions
+from dubsync.core.subtitle_options import SubtitleOptions
 from dubsync.core.fingerprint import fingerprint_many
 from dubsync.core.models import (AlignmentResult, EpisodeGroup, MediaInfo, TrackChoice,
                                  TimelineSegment, validate_timeline_layout)
@@ -116,133 +120,6 @@ def save_settings(data: dict[str, Any]) -> None:
             raise
     except OSError:
         pass
-
-
-class NamedCancelEvent(threading.Event):
-    """Cooperative cancellation with provenance for support diagnostics."""
-
-    def __init__(self):
-        super().__init__()
-        self.reason = None
-        self.requested_utc = None
-
-    def request(self, reason: str = "unspecified") -> None:
-        if not self.is_set():
-            self.reason = reason
-            self.requested_utc = datetime.now().astimezone().isoformat()
-        self.set()
-
-
-class TaskWorker(QThread):
-    progress = Signal(str, int, int)
-    def __init__(self, task: Callable, parent=None):
-        super().__init__(parent)
-        self.task = task
-        self.cancel_event = NamedCancelEvent()
-        self.pause_event = threading.Event()
-        self.result_value = None
-        self.error_text = ""
-        self.cancelled = False
-
-    def report(self, message: str, current: int = 0, total: int = 0):
-        # Cooperative pause point: existing scan/alignment/export callbacks already
-        # funnel through here. Cancel always releases a paused worker immediately.
-        while self.pause_event.is_set() and not self.cancel_event.is_set():
-            self.cancel_event.wait(0.10)
-        if self.cancel_event.is_set():
-            raise RuntimeError("Aufgabe abgebrochen")
-        self.progress.emit(str(message), int(current), int(total))
-
-    def pause(self):
-        self.pause_event.set()
-
-    def resume(self):
-        self.pause_event.clear()
-
-    def cancel(self, reason: str = "unspecified"):
-        self.cancel_event.request(reason)
-        self.pause_event.clear()
-
-    def run(self):
-        try:
-            self.result_value = self.task(self.report, self.cancel_event)
-            self.cancelled = self.cancel_event.is_set()
-        except Exception as exc:
-            self.cancelled = self.cancel_event.is_set()
-            if not self.cancelled:
-                self.error_text = f"{exc}\n\n{traceback.format_exc()}"
-
-
-class ProgressHistoryPlot(QWidget):
-    """Compact, accessible sparkline showing recent job-progress samples."""
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.values: list[float] = []
-        self.setMinimumSize(110, 28)
-        self.setMaximumWidth(150)
-        self.setAccessibleName("Verlauf des Aufgabenfortschritts")
-        self.setToolTip("Verlauf des zuletzt gemeldeten Fortschritts")
-
-    def reset(self):
-        self.values.clear()
-        self.update()
-
-    def add_sample(self, value: float):
-        self.values.append(max(0.0, min(1.0, float(value))))
-        self.values = self.values[-48:]
-        self.update()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        area = self.rect().adjusted(5, 4, -5, -4)
-        painter.setPen(QPen(QColor("#263b55"), 1))
-        painter.drawLine(area.left(), area.bottom(), area.right(), area.bottom())
-        if not self.values:
-            painter.setPen(QColor("#8298b2"))
-            painter.drawText(area, Qt.AlignmentFlag.AlignCenter, "Fortschritt")
-            return
-        points = []
-        span = max(1, len(self.values) - 1)
-        for i, value in enumerate(self.values):
-            x = area.left() + area.width() * i / span
-            y = area.bottom() - area.height() * value
-            points.append(QPointF(x, y))
-        painter.setPen(QPen(QColor("#54a7ff"), 2, Qt.PenStyle.SolidLine,
-                            Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        for left, right in zip(points, points[1:]):
-            painter.drawLine(left, right)
-
-
-class SourceDropList(QListWidget):
-    """Accessible source list that accepts local folders/videos via drag-and-drop."""
-    pathsDropped = Signal(list)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setAcceptDrops(True)
-        self.setDragEnabled(False)
-        self.setToolTip("Ziehe Medienordner oder einzelne Videodateien hier hinein. NAS-Mounts werden unterstützt.")
-
-    def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-            return
-        super().dragEnterEvent(event)
-
-    def dragMoveEvent(self, event):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-            return
-        super().dragMoveEvent(event)
-
-    def dropEvent(self, event):
-        values = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
-        if values:
-            self.pathsDropped.emit(values)
-            event.acceptProposedAction()
-            return
-        event.ignore()
 
 
 class PerformanceSettingsDialog(QDialog):
@@ -500,113 +377,6 @@ class PerformanceSettingsDialog(QDialog):
                 self._cpu_decoder_tuning.get("threads") == values["cpu_threads"]):
             values["cpu_decoder_tuning"] = dict(self._cpu_decoder_tuning)
         return values
-
-
-class AlignmentResidualPlot(QWidget):
-    """Compact, accessible confidence/residual plot of synchronization anchors."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.result: AlignmentResult | None = None
-        self.offset = 0.0
-        self.scale = 1.0
-        self.setObjectName("alignmentResidualPlot")
-        self.setMinimumHeight(62)
-        self.setMaximumHeight(78)
-        self.setAccessibleName("Synchronisationsqualität und Ankerabweichungen")
-        description = "Diagramm der Zeitabweichung einzelner Videoanker von der aktuellen linearen Synchronisationskorrektur."
-        self.setAccessibleDescription(description)
-        self.setToolTip(description)
-
-    def set_alignment(self, result: AlignmentResult | None, offset: float | None = None,
-                      scale: float | None = None):
-        self.result = result
-        self.offset = float(result.offset if offset is None and result else offset or 0.0)
-        self.scale = float(result.slope if scale is None and result else scale or 1.0)
-        piecewise = bool(result and result.segments
-                         and abs(self.offset - result.offset) <= 0.00051
-                         and abs(self.scale - result.slope) <= 0.00000051)
-        description = (("Diagramm zu manuell bearbeiteten Abschnitten; Anker belegen die neuen Grenzen nicht automatisch."
-                        if result and result.manual_segments else
-                        "Diagramm der Abweichungen von den einzeln bestätigten Zeitabschnitten.")
-                       if piecewise else
-                       "Diagramm der Zeitabweichung einzelner Videoanker von der aktuellen linearen Synchronisationskorrektur.")
-        self.setAccessibleDescription(description)
-        self.setToolTip(description)
-        self.update()
-
-    def paintEvent(self, _event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        outer = QRectF(self.rect()).adjusted(1, 1, -1, -1)
-        painter.setPen(QPen(QColor("#293b54"), 1))
-        painter.setBrush(QBrush(QColor("#0c1727")))
-        painter.drawRoundedRect(outer, 9, 9)
-        result = self.result
-        if result is None or not result.anchors:
-            painter.setPen(QColor("#93a4bb"))
-            painter.drawText(outer.adjusted(12, 0, -10, 0),
-                             int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
-                             "Synchronisationsanker erscheinen nach der Analyse")
-            painter.end()
-            return
-
-        anchors = result.anchors
-        piecewise = bool(result.segments
-                         and abs(self.offset - result.offset) <= 0.00051
-                         and abs(self.scale - result.slope) <= 0.00000051)
-        residuals = ([a.target_time - result.target_time(a.source_time) for a in anchors]
-                     if piecewise else
-                     [a.target_time - (self.scale * a.source_time + self.offset) for a in anchors])
-        threshold = max(0.75, result.sample_interval * 1.20)
-        max_abs = max(threshold * 1.8, max((abs(value) for value in residuals), default=0.0) * 1.15, 0.2)
-        plot = outer.adjusted(12, 22, -10, -10)
-        if plot.width() < 10 or plot.height() < 10:
-            painter.end()
-            return
-        x_for = lambda value: plot.left() + max(0.0, min(1.0, value / max(result.source_duration, 0.001))) * plot.width()
-        y_for = lambda value: plot.center().y() - (value / max_abs) * (plot.height() / 2)
-
-        # Tolerance band shows the residual range used by the confidence calculation.
-        band_top = y_for(threshold)
-        band_bottom = y_for(-threshold)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(QColor(52, 211, 153, 24)))
-        painter.drawRoundedRect(QRectF(plot.left(), band_top, plot.width(), max(1.0, band_bottom-band_top)), 3, 3)
-        painter.setPen(QPen(QColor("#29415d"), 1, Qt.PenStyle.DotLine))
-        for fraction in (0.25, 0.5, 0.75):
-            x = plot.left() + plot.width() * fraction
-            painter.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()))
-        painter.setPen(QPen(QColor("#6f89a8"), 1))
-        painter.drawLine(QPointF(plot.left(), y_for(0.0)), QPointF(plot.right(), y_for(0.0)))
-        painter.setPen(QPen(QColor("#6f89a8"), 1, Qt.PenStyle.DotLine))
-        painter.drawLine(QPointF(plot.left(), band_top), QPointF(plot.right(), band_top))
-        painter.drawLine(QPointF(plot.left(), band_bottom), QPointF(plot.right(), band_bottom))
-
-        for anchor, residual in zip(anchors, residuals):
-            if abs(residual) <= threshold:
-                color = QColor("#34d399")
-            elif abs(residual) <= max_abs * 0.8:
-                color = QColor("#fbbf24")
-            else:
-                color = QColor("#fb7185")
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(color))
-            painter.drawEllipse(QPointF(x_for(anchor.source_time), y_for(residual)), 2.4, 2.4)
-
-        painter.setPen(QColor("#d8e5f6"))
-        painter.drawText(QRectF(outer.left()+10, outer.top()+3, outer.width()*0.6, 16),
-                         int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-                         "ABSCHNITTS-ANKER" if piecewise else "ANKER-ABWEICHUNG")
-        painter.setPen(QColor("#91a7c4"))
-        painter.drawText(QRectF(outer.right()-170, outer.top()+3, 158, 16),
-                         int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
-                         f"{result.confidence:.0%} · RMS {self._rms(residuals):.2f}s")
-        painter.end()
-
-    @staticmethod
-    def _rms(values: list[float]) -> float:
-        return (sum(value * value for value in values) / len(values)) ** 0.5 if values else 0.0
 
 
 class SyncPreviewDialog(QDialog):
@@ -1512,6 +1282,7 @@ class MainWindow(QMainWindow):
         self._session_cache_dir = tempfile.TemporaryDirectory(prefix="dubsync-session-")
         self.cache = AlignmentCache(Path(self._session_cache_dir.name) / "alignments.sqlite3")
         self.source_rows: dict[str, SourceRow] = {}
+        self._master_radio_group: QButtonGroup | None = None
         self.selected_group: EpisodeGroup | None = None
         self.selected_master: str | None = None
         self.worker: TaskWorker | None = None
@@ -1547,7 +1318,7 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(20, 14, 20, 10)
+        root.setContentsMargins(12, 8, 12, 6)
         root.setSpacing(10)
 
         header = QHBoxLayout()
@@ -1828,11 +1599,11 @@ class MainWindow(QMainWindow):
         splitter.setChildrenCollapsible(False)
 
         left = QFrame()
-        left.setObjectName("panel")
+        left.setObjectName("librarySidebar")
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(14, 14, 14, 14)
         left_layout.setSpacing(10)
-        left_layout.addWidget(self._section_title("Episoden", "Fassungen rechts abgleichen."))
+        left_layout.addWidget(self._section_title("Bibliothek", "Episode auswählen"))
         self.root_hint = QLabel("Ordner oder Videodateien hier hineinziehen · NAS über die Quellenleiste hinzufügen")
         self.root_hint.setObjectName("dropHint")
         self.root_hint.setWordWrap(True)
@@ -1854,7 +1625,7 @@ class MainWindow(QMainWindow):
 
         filter_row = QHBoxLayout()
         self.episode_search = QLineEdit()
-        self.episode_search.setPlaceholderText("Folge, Serie oder Dateiname suchen …")
+        self.episode_search.setPlaceholderText("Episoden suchen …")
         self.episode_search.setAccessibleName("Serienbibliothek durchsuchen")
         self.episode_search.setClearButtonEnabled(True)
         self.episode_search.setToolTip("Filtert die Bibliothek ohne einen neuen Scan auszulösen.")
@@ -1875,11 +1646,12 @@ class MainWindow(QMainWindow):
         left_layout.addLayout(filter_row)
 
         self.episode_table = QTableWidget(0, 4)
+        self.episode_table.setObjectName("episodeLibrary")
         self.episode_table.setHorizontalHeaderLabels(["Episode / Gruppe", "Dateien", "Sprachen", "Status"])
         self.episode_table.setAccessibleName("Erkannte Serien und Episoden")
         self.episode_table.setAccessibleDescription("Wähle eine Episode, um Bildmaster, Audiospuren und Synchronisationsqualität zu konfigurieren.")
         self.episode_table.verticalHeader().setVisible(False)
-        self.episode_table.verticalHeader().setDefaultSectionSize(44)
+        self.episode_table.verticalHeader().setDefaultSectionSize(36)
         self.episode_table.horizontalHeader().setMinimumHeight(38)
         self.episode_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.episode_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -1895,18 +1667,26 @@ class MainWindow(QMainWindow):
         splitter.addWidget(left)
 
         right = QFrame()
-        right.setObjectName("panel")
+        right.setObjectName("trackInspector")
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(14, 14, 14, 14)
         right_layout.setSpacing(10)
         self.detail_heading = QLabel("Episode einrichten")
         self.detail_heading.setObjectName("sectionTitle")
+        right_layout.addWidget(self._sidebar_caption("INSPECTOR"))
         right_layout.addWidget(self.detail_heading)
         self.detail_description = QLabel("Wähle links eine Gruppe aus. Bestimme anschließend das Referenzvideo und die hinzuzufügenden Audiospuren.")
         self.detail_description.setObjectName("mutedText")
         self.detail_description.setWordWrap(True)
         self.detail_description.setAccessibleName("Informationen zur ausgewählten Episode")
         right_layout.addWidget(self.detail_description)
+        self.inspector_track_filter = QComboBox()
+        self.inspector_track_filter.setAccessibleName("Angezeigte Spuren im Inspector")
+        self.inspector_track_filter.setToolTip("Nur die Anzeige filtern; Auswahl und Export bleiben unverändert.")
+        self.inspector_track_filter.addItem("Alle Fassungen", None)
+        self.inspector_track_filter.currentIndexChanged.connect(self._filter_inspector_tracks)
+        self.inspector_track_filter.setEnabled(False)
+        right_layout.addWidget(self.inspector_track_filter)
 
         self.detail_scroll = QScrollArea()
         self.detail_scroll.setWidgetResizable(True)
@@ -2012,11 +1792,11 @@ class MainWindow(QMainWindow):
         self._nav_buttons = []
         self.navigation_group = QButtonGroup(self)
         self.navigation_group.setExclusive(True)
-        for index, label in enumerate(("Studio", "Stapelzentrale", "Aktivität")):
+        for index, label in enumerate(("Bibliothek", "Stapel", "Aktivität")):
             button = QPushButton(label)
             button.setObjectName("navButton")
             button.setCheckable(True)
-            button.setMinimumWidth(130)
+            button.setMinimumWidth(100)
             button.setMinimumHeight(34)
             button.setAccessibleName(label)
             button.setShortcut(f"Alt+{index + 1}")
@@ -2033,6 +1813,15 @@ class MainWindow(QMainWindow):
         self.review_focus_button.setAccessibleName("Vergleich vergrößern")
         self.review_focus_button.toggled.connect(self._set_review_focus)
         nav.addWidget(self.review_focus_button)
+        self.inspector_toggle = QPushButton("Inspector")
+        self.inspector_toggle.setObjectName("viewToggleButton")
+        self.inspector_toggle.setCheckable(True)
+        self.inspector_toggle.setChecked(True)
+        self.inspector_toggle.setShortcut("Alt+I")
+        self.inspector_toggle.setAccessibleName("Spur-Inspector ein- oder ausblenden")
+        self.inspector_toggle.setToolTip("Spur-Inspector ein- oder ausblenden · Alt+I")
+        self.inspector_toggle.toggled.connect(self._set_inspector_visible)
+        nav.addWidget(self.inspector_toggle)
         nav.addStretch(1)
         self.sidebar_state = QLabel("Neue Sitzung")
         self.sidebar_state.setObjectName("mutedText")
@@ -2101,9 +1890,10 @@ class MainWindow(QMainWindow):
         review_scroll.setWidget(self.review_panel)
         review_scroll.setMinimumWidth(290)
         splitter.insertWidget(1, review_scroll)
-        splitter.setSizes([310, 435, 515])
+        splitter.setSizes([285, 565, 410])
         self.studio_splitter = splitter
         self._splitter_state_before_focus = None
+        self._splitter_state_before_inspector = None
 
         # Page 1: real three-pane review desk, one episode at a time.
         library = QWidget()
@@ -2115,11 +1905,11 @@ class MainWindow(QMainWindow):
         )
         lib.addWidget(self.library_heading)
         lib.addWidget(source_panel)
-        lib.addWidget(splitter, 1)
         for button in (self.diagnostic_button, self.batch_diagnostic_button):
             button.parentWidget().layout().removeWidget(button)
             button.hide()
         lib.addLayout(action_row)
+        lib.addWidget(splitter, 1)
         continue_row = QHBoxLayout()
         self.library_status = QLabel("Noch keine Quellen hinzugefügt")
         self.library_status.setObjectName("mutedText")
@@ -2128,7 +1918,7 @@ class MainWindow(QMainWindow):
         self.to_export_button = QPushButton("Stapel vorbereiten →")
         self.to_export_button.setObjectName("primaryButton")
         self.to_export_button.clicked.connect(lambda: self._navigate_to(1))
-        self.export_button.parentWidget().layout().addWidget(self.to_export_button)
+        continue_row.addWidget(self.to_export_button)
         lib.addLayout(continue_row)
         self.episode_surface.setMinimumHeight(110)
         # A laptop-height viewport cannot accommodate the three-pane editor,
@@ -2323,15 +2113,31 @@ class MainWindow(QMainWindow):
         for index, button in enumerate(self._nav_buttons):
             button.setChecked(index == page)
         self.review_focus_button.setVisible(page == 0)
+        self.inspector_toggle.setVisible(page == 0)
         self.statusBar().showMessage(
             ("Quellen · Framevergleich · Spuren", "Stapel und Ausgabe", "Verarbeitung und Diagnose")[page], 2500
         ) if self.statusBar() is not None else None
         if page == 1 and hasattr(self, "queue_room"):
             self._refresh_inline_queue()
 
+    def _set_inspector_visible(self, visible: bool):
+        """Hide only the inspector; retain the editor widgets and values."""
+        splitter = self.studio_splitter
+        if self.review_focus_button.isChecked():
+            return
+        if visible:
+            splitter.widget(2).show()
+            if self._splitter_state_before_inspector is not None:
+                splitter.restoreState(self._splitter_state_before_inspector)
+            self._splitter_state_before_inspector = None
+        else:
+            self._splitter_state_before_inspector = splitter.saveState()
+            splitter.widget(2).hide()
+
     def _set_review_focus(self, focused: bool):
         """Expand the evidence monitor without rebuilding the episode editor."""
         splitter = self.studio_splitter
+        self.inspector_toggle.setEnabled(not focused)
         if focused:
             self._splitter_state_before_focus = splitter.saveState()
             splitter.widget(0).hide()
@@ -2344,6 +2150,8 @@ class MainWindow(QMainWindow):
             if self._splitter_state_before_focus is not None:
                 splitter.restoreState(self._splitter_state_before_focus)
             self._splitter_state_before_focus = None
+            if not self.inspector_toggle.isChecked():
+                splitter.widget(2).hide()
             label = "Vergleich vergrößern"
             hint = "Vergleich ohne Episodenliste und Spureditor anzeigen · Alt+0"
         self.review_focus_button.setText(label)
@@ -2455,6 +2263,11 @@ class MainWindow(QMainWindow):
 
     def _refresh_inline_queue(self):
         if not hasattr(self, "queue_room"):
+            return
+        # Keep the durable queue active but defer table construction/DB reads
+        # until the queue workspace is actually requested. _navigate_to(1)
+        # always refreshes, including after jobs finish on the Activity page.
+        if self._page_stack.currentIndex() != 1:
             return
         if self.batch_queue is None:
             self.queue_room.show_unavailable("Warteschlange nicht verfügbar; Details im Systemprotokoll.")
@@ -2635,6 +2448,17 @@ class MainWindow(QMainWindow):
         contrast_action.setToolTip("Erhöht Kontrast und Konturen für bessere Lesbarkeit.")
         contrast_action.toggled.connect(self._toggle_high_contrast)
         settings_menu.addAction(contrast_action)
+        appearance_menu = settings_menu.addMenu("Erscheinungsbild")
+        self.appearance_group = QActionGroup(self)
+        self.appearance_group.setExclusive(True)
+        for mode, title in (("light", "Hell"), ("dark", "Dunkel")):
+            action = QAction(title, self)
+            action.setCheckable(True)
+            action.setData(mode)
+            action.setChecked(normalize_appearance(self.settings.get("appearance")) == mode)
+            self.appearance_group.addAction(action)
+            action.triggered.connect(lambda checked, value=mode: self._set_appearance(value) if checked else None)
+            appearance_menu.addAction(action)
         settings_menu.addSeparator()
         performance_action = QAction("Leistung & Analyse…", self)
         performance_action.triggered.connect(self._open_settings)
@@ -2985,7 +2809,10 @@ class MainWindow(QMainWindow):
         return box
 
     def _stylesheet(self) -> str:
-        return studio_stylesheet(self.settings.get("high_contrast", False))
+        mode = normalize_appearance(self.settings.get("appearance"))
+        contrast = bool(self.settings.get("high_contrast", False))
+        apply_appearance(mode, contrast)
+        return studio_stylesheet(contrast, appearance=mode)
 
     def _update_tool_status(self):
         try:
@@ -3110,10 +2937,20 @@ class MainWindow(QMainWindow):
         elif chosen == remove_action:
             self.remove_folder()
 
+    def _set_appearance(self, appearance: str):
+        mode = normalize_appearance(appearance)
+        self.settings["appearance"] = mode
+        for action in self.appearance_group.actions():
+            action.setChecked(action.data() == mode)
+        self.setStyleSheet(self._stylesheet())
+        for widget in self.findChildren(QWidget):
+            widget.update()
+        # Appearance is a preference, not a project modification.
+        save_settings(persistent_preferences(self.settings))
+
     def _toggle_high_contrast(self, enabled: bool):
         self.settings["high_contrast"] = bool(enabled)
-        self.setStyleSheet(self._stylesheet())
-        self._save_settings()
+        self._set_appearance(normalize_appearance(self.settings.get("appearance")))
         self.statusBar().showMessage("Hoher Kontrast aktiviert" if enabled else "Standardkontrast aktiviert", 4000)
 
     def _add_source_root(self, directory: str):
@@ -4086,19 +3923,49 @@ class MainWindow(QMainWindow):
         self.detail_description.setText(f"{group.count} Dateien · Metadaten und Audiospuren werden geladen …")
         self._clear_detail("Analysiere Dateiformate und Audiospuren …")
 
-    def _clear_detail(self, message: str):
+    def _filter_inspector_tracks(self, _index: int = 0):
+        """Filter presentation only: _active_track_rows still sees every row."""
+        selected = self.inspector_track_filter.currentData()
+        for path, row in self.source_rows.items():
+            row.setVisible(selected is None or path == selected)
+
+    def _update_inspector_tracks(self, selected=None):
+        combo = self.inspector_track_filter
+        blocked = combo.blockSignals(True)
+        try:
+            combo.clear()
+            combo.addItem("Alle Fassungen", None)
+            for path in self.source_rows:
+                combo.addItem(Path(path).name, path)
+                combo.setItemData(combo.count() - 1, path, Qt.ItemDataRole.ToolTipRole)
+            index = combo.findData(selected) if selected is not None else 0
+            combo.setCurrentIndex(max(0, index))
+            combo.setEnabled(bool(self.source_rows))
+        finally:
+            combo.blockSignals(blocked)
+        self._filter_inspector_tracks()
+
+    def _clear_detail(self, message: str | None):
+        # A QButtonGroup parented to MainWindow used to survive every episode
+        # rebuild. Drop its ownership and old widgets together.
+        if self._master_radio_group is not None:
+            self._master_radio_group.deleteLater()
+            self._master_radio_group = None
         while self.detail_layout.count():
             item = self.detail_layout.takeAt(0)
             widget = item.widget()
             if widget:
+                widget.hide()
                 widget.deleteLater()
-        label = QLabel(message)
-        label.setObjectName("mutedText")
-        label.setWordWrap(True)
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.detail_layout.addWidget(label)
-        self.detail_layout.addStretch(1)
         self.source_rows.clear()
+        self._update_inspector_tracks()
+        if message is not None:
+            label = QLabel(message)
+            label.setObjectName("mutedText")
+            label.setWordWrap(True)
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.detail_layout.addWidget(label)
+            self.detail_layout.addStretch(1)
 
     def _render_group(self, group: EpisodeGroup):
         # Automatically use the smallest video file as picture master to minimize
@@ -4116,13 +3983,8 @@ class MainWindow(QMainWindow):
         if manual_master in group.files and manual_master in self.media_cache:
             if self.media_cache[manual_master].video:
                 self.selected_master = manual_master
-        self._clear_detail("")
-        while self.detail_layout.count():
-            item = self.detail_layout.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.deleteLater()
-        self.source_rows = {}
+        selected_inspector_path = self.inspector_track_filter.currentData()
+        self._clear_detail(None)
         self.detail_heading.setText(group.display_name)
         total_duration = max((self.media_cache[p].duration for p in group.files if p in self.media_cache), default=0)
         master_info = self.media_cache.get(self.selected_master or "")
@@ -4172,7 +4034,8 @@ class MainWindow(QMainWindow):
         auto_master_button.clicked.connect(lambda _checked=False, key=group.key: self._reset_master_override(key))
         self.detail_layout.addWidget(auto_master_button)
 
-        radios = QButtonGroup(self)
+        radios = QButtonGroup(self.detail_content)
+        self._master_radio_group = radios
         radios.setExclusive(True)
         for index, path in enumerate(group.files):
             info = self.media_cache.get(path)
@@ -4242,6 +4105,7 @@ class MainWindow(QMainWindow):
             row.trackChanged.connect(lambda _unused=None, source_path=path: self._on_track_changed(source_path))
 
         self.detail_layout.addStretch(1)
+        self._update_inspector_tracks(selected_inspector_path)
         self._refresh_track_actions()
         self.review_panel.show_group(group, self.selected_master, self.media_cache,
                                      self._review_alignments())
@@ -5413,6 +5277,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "library_empty_action"):
             self.library_empty_action.setEnabled(enabled)
         self.detail_scroll.setEnabled(enabled)
+        self.inspector_track_filter.setEnabled(enabled and bool(self.source_rows))
         if hasattr(self, "profile_quick_combo"):
             self.profile_quick_combo.setEnabled(enabled)
         if hasattr(self, "queue_room"):

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import os
 import sqlite3
 import time
@@ -16,11 +15,12 @@ import zlib
 from collections import OrderedDict
 from pathlib import Path
 
+from .sample_validation import MAX_SAMPLES, validate_samples
+
 
 SAMPLE_FORMAT_VERSION = 1
 MAX_ENTRIES = 400
 MAX_CACHE_BYTES = 128 * 1024 * 1024
-MAX_SAMPLES = 6000
 MEMORY_ENTRIES = 12
 WINDOW_BYTES = 16384
 WINDOW_COUNT = 11
@@ -123,23 +123,7 @@ class FrameSampleCache:
                 raw = decoder.decompress(row[0], MAX_SAMPLES * 50)
                 if not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
                     raise ValueError("Unvollständiger oder übergroßer Sample-Eintrag")
-                pairs = json.loads(raw)
-                if not isinstance(pairs, list) or not 4 <= len(pairs) <= MAX_SAMPLES:
-                    raise ValueError("Ungültige Anzahl gecachter Samples")
-                samples: list[tuple[float, int]] = []
-                last = -1.0
-                for item in pairs:
-                    if not isinstance(item, list) or len(item) != 2:
-                        raise ValueError("Ungültige Sample-Struktur")
-                    stamp, value = item
-                    if (type(stamp) not in (int, float) or not math.isfinite(stamp) or
-                            stamp <= last or stamp < 0 or stamp > duration + interval * 2 or
-                            type(value) is not int or not 0 <= value < 2**64):
-                        raise ValueError("Beschädigter Sample-Eintrag")
-                    samples.append((float(stamp), value))
-                    last = stamp
-                if last < max(0.0, duration - interval * 2):
-                    raise ValueError("Sample-Cache deckt das Dateiende nicht ausreichend ab")
+                samples = validate_samples(json.loads(raw), duration, interval)
                 db.execute("UPDATE samples SET accessed_at=? WHERE key=?", (time.time(), key))
             self._remember(key, samples)
             return list(samples)
@@ -159,15 +143,11 @@ class FrameSampleCache:
 
     def put(self, identity: str, duration: float, interval: float,
             samples: list[tuple[float, int]], mode: str = "auto") -> bool:
-        if not self._enabled or not 4 <= len(samples) <= MAX_SAMPLES:
+        if not self._enabled:
             return False
-        if (not samples or not math.isfinite(samples[-1][0]) or
-                samples[-1][0] < max(0.0, duration - interval * 2)):
-            # Do not persist an interrupted/truncated but technically readable
-            # decode. A later run should retry that media from scratch.
-            return False
-        key = self._key(identity, duration, interval, mode)
         try:
+            samples = validate_samples(samples, duration, interval)
+            key = self._key(identity, duration, interval, mode)
             payload = zlib.compress(json.dumps(samples, separators=(",", ":"),
                                                allow_nan=False).encode("ascii"), level=3)
             if len(payload) > 250000:
