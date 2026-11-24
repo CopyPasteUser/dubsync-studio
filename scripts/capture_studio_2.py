@@ -6,27 +6,36 @@ for layout documentation, not evidence of a successful real-world export.
 """
 from __future__ import annotations
 
+import argparse
 import os
 import math
 import tempfile
 from pathlib import Path
 
 
-def main() -> int:
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--appearance", choices=("light", "dark"), default="light")
+    parser.add_argument("--output-dir", type=Path)
+    args = parser.parse_args(argv)
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication, QTableWidgetItem
     from dubsync.core.models import AlignmentResult, Anchor, EpisodeGroup, MediaInfo, StreamInfo
     from dubsync.gui.main_window import MainWindow
 
     project = Path(__file__).resolve().parents[1]
-    screenshots = project / "docs" / "screenshots"
-    screenshots.mkdir(exist_ok=True)
+    screenshots = args.output_dir or (project / "docs" / "screenshots")
+    screenshots.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="dubsync-studio-layout-qa-") as directory:
         for name in ("CONFIG", "CACHE", "STATE"):
             os.environ[f"XDG_{name}_HOME"] = str(Path(directory) / name.lower())
         app = QApplication.instance() or QApplication([])
         window = MainWindow()
         try:
+            window._set_appearance(args.appearance)
+            def capture(name: str):
+                if not window.grab().save(str(screenshots / name)):
+                    raise RuntimeError(f"Screenshot could not be written: {name}")
             window.output_dir_edit.setText("/synthetisch/ausgabe")
             window.resize(1440, 900)
             master = "/synthetisch/de/Beispielfolge-S01E01.mkv"
@@ -60,14 +69,14 @@ def main() -> int:
             window._refresh_workflow_summary()
             window.show()
             app.processEvents()
-            window.grab().save(str(screenshots / "studio-review-4.png"))
+            capture("studio-review-4.png")
             # Show the entire evidence panel and its cursor-specific status.
             # All evidence here is derived from synthetic anchors, never media.
             window.resize(1440, 1180)
             window.review_focus_button.setChecked(True)
             window.review_panel.timeline.set_position(45, emit=True)
             app.processEvents()
-            window.grab().save(str(screenshots / "studio-focus-4.png"))
+            capture("studio-focus-4.png")
             # Only synthetic amplitudes: demonstrate the actual Qt drawing
             # component without suggesting that real source audio was read.
             window.review_panel.review_tabs.setCurrentIndex(2)
@@ -77,23 +86,23 @@ def main() -> int:
             window.review_panel.wave_status.setText(
                 "SYNTHETISCHE DEMO · keine Audiodaten gelesen")
             app.processEvents()
-            window.grab().save(str(screenshots / "studio-waveform-4.png"))
+            capture("studio-waveform-4.png")
             window.review_panel.review_tabs.setCurrentIndex(1)
             window.review_focus_button.setChecked(False)
             window.resize(1440, 900)
             app.processEvents()
             window._navigate_to(1)
             app.processEvents()
-            window.grab().save(str(screenshots / "studio-queue-4.png"))
+            capture("studio-queue-4.png")
             export = window._page_stack.currentWidget()
             export.ensureWidgetVisible(window.profile_tradeoff)
             app.processEvents()
-            window.grab().save(str(screenshots / "studio-hardware-presets-4.png"))
+            capture("studio-hardware-presets-4.png")
             window._navigate_to(0)
             window.review_panel.review_tabs.setCurrentIndex(0)
             window.resize(980, 680)
             app.processEvents()
-            window.grab().save(str(screenshots / "studio-compact-4.png"))
+            capture("studio-compact-4.png")
         finally:
             window.project_dirty = False
             window.close()
