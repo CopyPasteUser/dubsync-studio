@@ -7,7 +7,6 @@ interrupted process does not erase already-completed episode decisions.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import math
 import re
@@ -20,6 +19,7 @@ from typing import Any
 
 from .logging_setup import default_log_path
 from .models import EpisodeGroup
+from .batch_snapshot import snapshot_json
 
 
 def batch_diagnostics_directory() -> Path:
@@ -228,8 +228,7 @@ class BatchDiagnostic:
             with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".tmp",
                                              prefix=".batch-", dir=self.directory, delete=False) as handle:
                 temp_path = handle.name
-                json.dump(self.payload, handle, indent=2, ensure_ascii=False, allow_nan=False)
-                handle.write("\n")
+                handle.write(snapshot_json(self.payload))
             os.chmod(temp_path, 0o600)
             os.replace(temp_path, self.path)
         except (OSError, ValueError, TypeError) as exc:
