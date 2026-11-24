@@ -246,3 +246,32 @@ def test_busy_and_error_feedback_keep_recovery_accessible(window):
     assert window.insight_panel.property('state') == 'error'
     window._set_controls_enabled(True)
     assert window.scan_button.isEnabled()
+
+
+def test_inspector_toggle_keeps_editor_and_focus_state(window):
+    splitter = window.studio_splitter
+    editor = splitter.widget(2)
+    window.inspector_toggle.click()
+    assert editor.isHidden()
+    assert not splitter.widget(0).isHidden()
+    window.review_focus_button.click()
+    assert not window.inspector_toggle.isEnabled()
+    window.review_focus_button.click()
+    assert editor.isHidden()
+    window.inspector_toggle.click()
+    assert splitter.widget(2) is editor and not editor.isHidden()
+
+
+def test_appearance_change_is_not_project_edit(window):
+    from dubsync.gui.theme import TOKENS
+    from dubsync.gui.appearance import appearance_colors
+    from dubsync.gui.main_window import load_settings
+    dirty = window.project_dirty
+    window._set_appearance("dark")
+    assert window.settings["appearance"] == "dark"
+    assert load_settings()["appearance"] == "dark"
+    assert TOKENS == appearance_colors("dark", bool(window.settings.get("high_contrast")))
+    assert window.project_dirty == dirty
+    window._set_appearance("light")
+    assert load_settings()["appearance"] == "light"
+    assert window.project_dirty == dirty
