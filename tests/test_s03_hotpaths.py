@@ -31,8 +31,8 @@ class SnapshotTests(unittest.TestCase):
 class AudioFilterTests(unittest.TestCase):
     def test_exact_zero_only(self):
         self.assertEqual(delay_filter(0), "")
-        self.assertEqual(delay_filter(1), "adelay=1:all=1,")
-        self.assertEqual(delay_filter(250), "adelay=250:all=1,")
+        self.assertEqual(delay_filter(1), "adelay=1:all=1,asetpts=N/SR/TB,")
+        self.assertEqual(delay_filter(250), "adelay=250:all=1,asetpts=N/SR/TB,")
         with self.assertRaises(ValueError):
             delay_filter(-1)
 
@@ -76,6 +76,16 @@ class AudioFilterTests(unittest.TestCase):
                                     "-i", str(output), "-map", "0:a:0", "-c:a", "pcm_s16le",
                                     "-f", "hash", "-hash", "SHA256", "-"], timeout=20))
                             self.assertEqual(evidence[0], evidence[1])
+
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg required")
+    def test_positive_delay_keeps_exact_silence_and_sample_count(self):
+        pcm = subprocess.check_output(["ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi", "-i",
+            "sine=frequency=440:sample_rate=48000:duration=2", "-af",
+            delay_filter(500) + "apad,atrim=duration=2", "-f", "s16le", "-"], timeout=20)
+        self.assertEqual(len(pcm), 2 * 48000 * 2)
+        self.assertEqual(pcm[:24000 * 2], bytes(24000 * 2))
+        self.assertTrue(any(pcm[24000 * 2:]))
 
 
 if __name__ == "__main__":

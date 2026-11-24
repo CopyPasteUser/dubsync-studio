@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.acceptance_4_0 import Acceptance, StepFailed, compare_alignment, junit_summary, git, worktree
+from scripts.acceptance_4_0 import Acceptance, StepFailed, compare_alignment, compare_export, junit_summary, git, worktree
 
 
 class AcceptanceTests(unittest.TestCase):
@@ -75,3 +75,18 @@ class AcceptanceTests(unittest.TestCase):
             payload = json.loads((root / "manifest.json").read_text())
             self.assertEqual(payload["steps"][0]["status"], "failed")
             self.assertFalse(payload["release_authorized"])
+
+
+    def test_export_comparison_requires_continuous_reference_and_candidate(self):
+        good = {"evidence": {"audio": ["pcm"], "video": "video"}, "continuous_added_audio": True}
+        bad = {"evidence": {"audio": ["gap"], "video": "video"}, "continuous_added_audio": False}
+        baseline = {"scenario": "synthetic", "duration_s": 30, "inputs_unchanged": True,
+                    "observations": [good, bad], "median_seconds": 2.}
+        candidate = dict(baseline, observations=[good, good], evidence=good["evidence"], median_seconds=1.)
+        self.assertEqual(compare_export(baseline, candidate)["discontinuous_baseline_runs"], 1)
+        with self.assertRaises(StepFailed):
+            compare_export(dict(baseline, observations=[bad]), candidate)
+        with self.assertRaises(StepFailed):
+            compare_export(baseline, dict(candidate, observations=[good, bad]))
+        with self.assertRaises(StepFailed):
+            compare_export(dict(baseline, observations=[dict(good, evidence={"different": True})]), candidate)

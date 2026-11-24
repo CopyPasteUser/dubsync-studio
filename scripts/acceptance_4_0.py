@@ -143,6 +143,25 @@ def compare_alignment(before: dict, after: dict) -> dict:
             for mode in ("cold", "warm")}
 
 
+def compare_export(before: dict, after: dict) -> dict:
+    if (before["scenario"] != after["scenario"] or before["duration_s"] != after["duration_s"] or
+            not before["inputs_unchanged"] or not after["inputs_unchanged"]):
+        raise StepFailed("Incompatible export fixtures or modified inputs")
+    candidate = after["observations"]
+    if not candidate or not all(row["continuous_added_audio"] and row["evidence"] == after["evidence"]
+                                for row in candidate):
+        raise StepFailed("Candidate output is not repeatable and continuous")
+    references = [row["evidence"] for row in before["observations"] if row["continuous_added_audio"]]
+    if not references:
+        raise StepFailed("Baseline produced no continuous reference; review the recorded output evidence")
+    if any(reference != after["evidence"] for reference in references):
+        raise StepFailed("Candidate differs from continuous baseline export evidence")
+    return {"before_seconds": before["median_seconds"], "after_seconds": after["median_seconds"],
+            "continuous_baseline_runs": len(references),
+            "discontinuous_baseline_runs": len(before["observations"]) - len(references),
+            "candidate_runs": len(candidate)}
+
+
 def read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -181,13 +200,13 @@ def run(accept: Acceptance, baseline: Path, candidate: Path, repeats: int):
     shutil.copyfile(candidate / "scripts/benchmark_export.py", baseline / "scripts/benchmark_export.py")
     exports = []
     for label, root in (("baseline", baseline), ("candidate", candidate)):
-        file = accept.step(f"{label}-export", [python, "scripts/benchmark_export.py", "--repeat", str(repeats)], root)
+        command = [python, "scripts/benchmark_export.py", "--repeat", str(repeats)]
+        if label == "baseline":
+            command.append("--observe-baseline")
+        file = accept.step(f"{label}-export", command, root)
         exports.append(read_json(file))
-    if (not all(r["inputs_unchanged"] for r in exports) or
-            exports[0]["evidence"] != exports[1]["evidence"]):
-        raise StepFailed("Decoded audio or copied video evidence differs across revisions")
-    accept.report["export_comparison"] = {"before_seconds": exports[0]["median_seconds"],
-                                          "after_seconds": exports[1]["median_seconds"]}
+    accept.report["export_comparison"] = compare_export(*exports)
+    accept.save()
     gui = {}
     for label, root in (("baseline", baseline), ("candidate", candidate)):
         samples = []
