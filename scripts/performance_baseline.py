@@ -164,6 +164,7 @@ def gui_suite(args) -> dict:
     from PySide6.QtCore import QEventLoop, QTimer
     from PySide6.QtWidgets import QApplication
     from dubsync.gui.main_window import MainWindow
+    from dubsync.core.models import EpisodeGroup, MediaInfo, StreamInfo
 
     app = QApplication([])
     app.setStyle("Fusion")
@@ -188,13 +189,34 @@ def gui_suite(args) -> dict:
                 window._navigate_to(page)
                 app.processEvents()
                 transitions.append(time.perf_counter() - before)
+        # Measure the populated, already-probed episode rendering path without
+        # real media reads, rather than mistaking empty navigation for switching.
+        groups = []
+        for episode in range(2):
+            files = [f"/synthetic/S01E{episode+1:02d}-{lang}.mkv" for lang in ("de", "en", "fr")]
+            group = EpisodeGroup(f"bench-{episode}", f"Synthetic S01E{episode+1:02d}", files)
+            groups.append(group)
+            for i, path in enumerate(files):
+                window.media_cache[path] = MediaInfo(path, 180, "matroska", 1_000_000 + i,
+                    [StreamInfo(0, "video", codec_name="h264", width=1920, height=1080),
+                     StreamInfo(1, "audio", codec_name="aac", channels=2)], 1, 1, 0)
+        window.groups = groups
+        populated = []
+        for _ in range(args.repeat):
+            for group in groups:
+                before = time.perf_counter()
+                window.selected_group = group
+                window._render_group(group)
+                app.processEvents()
+                populated.append(time.perf_counter() - before)
         return {"qt_platform": app.platformName(), "viewport": [1280, 720],
                 "startup_import_construct_show_seconds": startup,
                 "parent_pss_mib_after_show": pss,
                 "parent_pss_mib_after_navigation": pss_mib(),
                 "idle_wall_seconds": idle_wall,
                 "idle_cpu_percent_one_core": 100 * idle_cpu / idle_wall,
-                "empty_workspace_navigation_seconds": summarize(transitions)}
+                "empty_workspace_navigation_seconds": summarize(transitions),
+                "preprobed_episode_render_seconds": summarize(populated)}
     finally:
         window.project_dirty = False
         window.close()
