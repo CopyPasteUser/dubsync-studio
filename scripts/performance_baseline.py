@@ -6,6 +6,7 @@ Cold means an empty DubSync frame cache, not an empty OS page cache.
 from __future__ import annotations
 
 import argparse
+import hashlib
 from dataclasses import asdict
 import json
 import os
@@ -147,7 +148,10 @@ def alignment_suite(directory: Path, args) -> dict:
                        "decoder": args.decoder, "requested_workers": args.workers,
                        "synthetic_duration_s": args.duration if not args.source else None},
             "native_matcher_available": _library() is not None,
-            "evidence_identical": True, "runs": runs,
+            "evidence_identical": True,
+            "evidence_sha256": hashlib.sha256(json.dumps(reference, sort_keys=True,
+                ensure_ascii=True, allow_nan=False, separators=(",", ":")).encode("ascii")).hexdigest(),
+            "runs": runs,
             "summary": {mode: {key: summarize([row[key] for row in rows])
                               for key in ("wall_seconds", "cpu_seconds_including_waited_children")}
                         for mode, rows in runs.items()}}
