@@ -34,3 +34,13 @@ S01 baseline reports. Test real local/NAS jobs, cancellation and crash recovery.
 The bounded multi-episode scheduler and optional exact-timestamp audio stream
 copy remain unimplemented pending resource and packet-timestamp validation;
 do not weaken the existing AAC verification contract. No CI workflows changed.
+
+## Bounded metadata scheduling
+
+When the existing two-worker sampling profile is selected, prefetch missing
+metadata for the current eligible episode with at most two existing FFprobe
+workers. Reuse the current CPU/RAM resource guard, forbid NAS parallelism and
+publish results only after a complete successful probe. Sequential mode and
+preflight/skip order remain unchanged. This is not concurrent episode export.
+Four isolated scheduler contracts passed; real batch integration and throughput
+measurements are still required.
