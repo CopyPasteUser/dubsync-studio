@@ -1,0 +1,82 @@
+# Development status — 24 November 2026
+
+**Released version: 3.0.0b1 (development beta).** The 4.0 implementation is
+under review in [PR #37](https://github.com/CopyPasteUser/dubsync-studio/pull/37).
+The default branch remains the 3.0 beta application; this status page does
+not announce a 4.0 release.
+
+[Integration branch](https://github.com/CopyPasteUser/dubsync-studio/tree/integration/4.0-studio) ·
+[4.0 roadmap](https://github.com/CopyPasteUser/dubsync-studio/blob/integration/4.0-studio/docs/ROADMAP_4_0.md) ·
+[Detailed acceptance evidence](https://github.com/CopyPasteUser/dubsync-studio/blob/integration/4.0-studio/docs/INTEGRATION_4_0.md)
+
+## 4.0 candidate
+
+Evidence snapshot: [`1928daf1ec18`](https://github.com/CopyPasteUser/dubsync-studio/commit/1928daf1ec18be4843e99d093f4a2e948e8d1b65).
+At that revision, 52 commits and 53 changed files consolidated the original
+five sprint PRs into one integration PR. These counts predate this
+documentation refresh.
+
+| Area | Implemented / verified scope |
+| --- | --- |
+| Performance | Bounded FFmpeg frame transport, consistent decoder thread budgets, validated master fingerprint reuse, compact batch journals |
+| Export | Responsive cancellation, atomic no-clobber publication, source binding, continuous positive-delay audio clock |
+| UI architecture | Extracted Qt components, indexed timeline, deferred queue refresh, cleanup of old button groups |
+| Studio appearance | Light/dark/high-contrast palettes, library sidebar, review toolbar, collapsible and filterable inspector |
+| Local subtitles | Real SRT mux acceptance, unchanged source hashes, copied master video, switchable extra track |
+| Release engineering | Revision-pinned offline test and benchmark harness, screenshot generation in both appearances |
+
+**Evidence:** 82 targeted tests and 110 subtests passed cumulatively on a
+partially reconstructed, hash-verified workspace; not the full suite.
+Local synthetic multitrack and section exports and subtitle muxing passed.
+In those fixtures, reproduced positive-delay packet gaps of 458 ms and
+958 ms were corrected to at most 1 ms of timestamp rounding. This is not
+a claim of universal media compatibility.
+
+| Isolated measurement | Result |
+| --- | --- |
+| FFmpeg frame transport messages | 53.1% fewer |
+| Batch journal serialization | 7.65× faster |
+| Batch journal size | 67.7% smaller |
+| Master fingerprint cache lookup | approximately 63× faster |
+| Timeline anchor projection | 306.6× faster |
+
+These are component microbenchmarks, not whole-application speedups.
+Full alignment, Rust/Qt regression, visual screenshot review and real
+GPU/NAS/desktop/audio acceptance remain open. The integration PR is a draft;
+no version bump, release or application-code merge has been made.
+
+## Visual direction for 4.0
+
+![4.0 light appearance — schematic, not a screenshot](design/studio-4-light.svg)
+
+![4.0 dark appearance — schematic, not a screenshot](design/studio-4-dark.svg)
+
+The two diagrams document the implemented palette and intended layout hierarchy.
+They are authored SVG design schematics, **not captures of the running application**.
+The actual Qt captures currently checked into `docs/screenshots/` show the
+3.0 beta (9 November 2026). The candidate could not be captured in the
+restricted development environment because PySide6/Qt6 was unavailable.
+
+## Capture actual 4.0 screenshots and finish acceptance
+
+On a prepared Linux checkout of the integration branch with the project's
+existing dependencies installed, run from the repository root:
+
+```bash
+./.venv/bin/python scripts/capture_studio_2.py --appearance light --output-dir docs/screenshots/4.0/light
+./.venv/bin/python scripts/capture_studio_2.py --appearance dark --output-dir docs/screenshots/4.0/dark
+```
+
+Review all six screenshots per mode (review, focus, waveform, queue, hardware
+presets, compact). Publish those PNGs under the new versioned directories and
+update the README gallery only after reviewing them. Do not overwrite the
+historical 3.0 captures or label a schematic as a real screenshot.
+
+For full local acceptance, use the clean integration checkout:
+
+```bash
+./.venv/bin/python scripts/acceptance_4_0.py
+```
+
+The report preserves all failures and skips and does not authorize a release.
+No provider credentials or real media are required for the synthetic captures.

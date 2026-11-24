@@ -11,12 +11,23 @@ individually or as a season.
 **Current release:** `3.0.0b1` (beta) · **Linux desktop** · Python / PySide6 / FFmpeg /
 OpenCV / optional Rust · **MIT**
 
+> **4.0 development update · 24 November 2026** — The next version is being
+> integrated in [PR #37](https://github.com/CopyPasteUser/dubsync-studio/pull/37).
+> See the [current implementation and acceptance status](docs/DEVELOPMENT_STATUS.md).
+> The released application remains 3.0.0b1; 4.0 is not released.
+
+![4.0 light appearance layout schematic](docs/design/studio-4-light.svg)
+
+<sub>4.0 design schematic, not a running-app screenshot. [Dark appearance and current status](docs/DEVELOPMENT_STATUS.md).</sub>
+
+## 3.0 beta — actual application screenshots (9 November 2026)
+
 ![DubSync Studio three-pane episode editor and evidence monitor](docs/screenshots/studio-review-4.png)
 
-<sub>Actual PySide6 interface, captured with synthetic demonstration data.
+<sub>Historical 3.0 beta PySide6 interface, captured with synthetic demonstration data.
 The displayed match and timeline are not proof of a real-media export.</sub>
 
-## Inside the Studio
+### Inside the 3.0 beta Studio
 
 | Focused image-evidence review | Optional audio A/B waveform review |
 | :---: | :---: |
@@ -24,7 +35,7 @@ The displayed match and timeline are not proof of a real-media export.</sub>
 | **Persistent batch control** | **Performance presets** |
 | ![Batch control room with empty-state guidance](docs/screenshots/studio-queue-4.png) | ![Hardware-aware settings and presets](docs/screenshots/studio-hardware-presets-4.png) |
 
-<sub>All images are real offscreen Qt captures with synthetic episode data.
+<sub>The 3.0 gallery contains real offscreen Qt captures with synthetic episode data.
 Waveform shapes are illustrative; no source audio or NAS files were read.
 See also the [compact 980 × 680 view](docs/screenshots/studio-compact-4.png).
 The performance preview reflects the capture environment, not a hardware
