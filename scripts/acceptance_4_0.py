@@ -47,9 +47,12 @@ def write_json(path: Path, value: dict) -> None:
 
 
 def isolated_env(root: Path, state: Path) -> dict[str, str]:
-    env = os.environ.copy()
+    # Do not inherit production cache paths, provider credentials or models.
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith("DUBSYNC_")}
     env.update(PYTHONPATH=str(root), PYTHONUNBUFFERED="1", QT_QPA_PLATFORM="offscreen",
-               CARGO_NET_OFFLINE="true", PIP_NO_INDEX="1", DUBSYNC_NATIVE="1")
+               CARGO_NET_OFFLINE="true", PIP_NO_INDEX="1", DUBSYNC_NATIVE="1",
+               DUBSYNC_SUBTITLE_AUTO_SYNC="0")
     for key in ("CONFIG", "CACHE", "STATE", "DATA"):
         private = state / key.lower()
         private.mkdir(parents=True, exist_ok=True)
@@ -188,6 +191,13 @@ def run(accept: Acceptance, baseline: Path, candidate: Path, repeats: int):
     if len(wheel_files) != 1:
         raise StepFailed("Expected exactly one built wheel")
     accept.step("candidate-wheel-check", [python, "scripts/verify_wheel.py", str(wheel_files[0])], candidate)
+    subtitle_report = accept.step("candidate-subtitle-acceptance",
+        [python, "scripts/acceptance_subtitles.py", "--json"], candidate)
+    subtitle_evidence = read_json(subtitle_report)
+    if not subtitle_evidence["passed"]:
+        raise StepFailed("Synthetic subtitle acceptance failed")
+    accept.report["subtitle_acceptance"] = subtitle_evidence
+    accept.save()
     # Same harness on both revisions; the baseline checkout is disposable.
     shutil.copyfile(candidate / "scripts/performance_baseline.py", baseline / "scripts/performance_baseline.py")
     comparisons = {}

@@ -1,14 +1,16 @@
 """Offline acceptance runner contracts; no actual release is authorized here."""
 from copy import deepcopy
 import json
+import os
 import sys
 import subprocess
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from scripts.acceptance_4_0 import Acceptance, StepFailed, compare_alignment, compare_export, junit_summary, git, worktree
+from scripts.acceptance_4_0 import Acceptance, StepFailed, compare_alignment, compare_export, junit_summary, git, worktree, isolated_env
 
 
 class AcceptanceTests(unittest.TestCase):
@@ -90,3 +92,21 @@ class AcceptanceTests(unittest.TestCase):
             compare_export(baseline, dict(candidate, observations=[good, bad]))
         with self.assertRaises(StepFailed):
             compare_export(dict(baseline, observations=[dict(good, evidence={"different": True})]), candidate)
+
+
+    def test_subprocess_environment_drops_production_overrides(self):
+        with tempfile.TemporaryDirectory() as d, patch.dict(os.environ, {
+                "DUBSYNC_SUBTITLE_CACHE_DIR": "/production/cache",
+                "DUBSYNC_SUBDL_API_KEY": "private-test-key",
+                "DUBSYNC_WHISPER_MODEL": "/production/model",
+                "DUBSYNC_NATIVE": "0",
+                "XDG_CACHE_HOME": "/production/xdg",
+        }):
+            root = Path(d)
+            env = isolated_env(root, root / "state")
+            self.assertEqual(env["DUBSYNC_NATIVE"], "1")
+            self.assertEqual(env["DUBSYNC_SUBTITLE_AUTO_SYNC"], "0")
+            self.assertEqual(set(k for k in env if k.startswith("DUBSYNC_")),
+                             {"DUBSYNC_NATIVE", "DUBSYNC_SUBTITLE_AUTO_SYNC"})
+            self.assertEqual(env["XDG_CACHE_HOME"], str(root / "state" / "cache"))
+            self.assertEqual(os.environ["DUBSYNC_SUBTITLE_CACHE_DIR"], "/production/cache")
