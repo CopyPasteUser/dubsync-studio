@@ -1282,6 +1282,7 @@ class MainWindow(QMainWindow):
         self._session_cache_dir = tempfile.TemporaryDirectory(prefix="dubsync-session-")
         self.cache = AlignmentCache(Path(self._session_cache_dir.name) / "alignments.sqlite3")
         self.source_rows: dict[str, SourceRow] = {}
+        self._master_radio_group: QButtonGroup | None = None
         self.selected_group: EpisodeGroup | None = None
         self.selected_master: str | None = None
         self.worker: TaskWorker | None = None
@@ -1624,7 +1625,7 @@ class MainWindow(QMainWindow):
 
         filter_row = QHBoxLayout()
         self.episode_search = QLineEdit()
-        self.episode_search.setPlaceholderText("Folge, Serie oder Dateiname suchen …")
+        self.episode_search.setPlaceholderText("Episoden suchen …")
         self.episode_search.setAccessibleName("Serienbibliothek durchsuchen")
         self.episode_search.setClearButtonEnabled(True)
         self.episode_search.setToolTip("Filtert die Bibliothek ohne einen neuen Scan auszulösen.")
@@ -1679,6 +1680,13 @@ class MainWindow(QMainWindow):
         self.detail_description.setWordWrap(True)
         self.detail_description.setAccessibleName("Informationen zur ausgewählten Episode")
         right_layout.addWidget(self.detail_description)
+        self.inspector_track_filter = QComboBox()
+        self.inspector_track_filter.setAccessibleName("Angezeigte Spuren im Inspector")
+        self.inspector_track_filter.setToolTip("Nur die Anzeige filtern; Auswahl und Export bleiben unverändert.")
+        self.inspector_track_filter.addItem("Alle Fassungen", None)
+        self.inspector_track_filter.currentIndexChanged.connect(self._filter_inspector_tracks)
+        self.inspector_track_filter.setEnabled(False)
+        right_layout.addWidget(self.inspector_track_filter)
 
         self.detail_scroll = QScrollArea()
         self.detail_scroll.setWidgetResizable(True)
@@ -3910,19 +3918,49 @@ class MainWindow(QMainWindow):
         self.detail_description.setText(f"{group.count} Dateien · Metadaten und Audiospuren werden geladen …")
         self._clear_detail("Analysiere Dateiformate und Audiospuren …")
 
-    def _clear_detail(self, message: str):
+    def _filter_inspector_tracks(self, _index: int = 0):
+        """Filter presentation only: _active_track_rows still sees every row."""
+        selected = self.inspector_track_filter.currentData()
+        for path, row in self.source_rows.items():
+            row.setVisible(selected is None or path == selected)
+
+    def _update_inspector_tracks(self, selected=None):
+        combo = self.inspector_track_filter
+        blocked = combo.blockSignals(True)
+        try:
+            combo.clear()
+            combo.addItem("Alle Fassungen", None)
+            for path in self.source_rows:
+                combo.addItem(Path(path).name, path)
+                combo.setItemData(combo.count() - 1, path, Qt.ItemDataRole.ToolTipRole)
+            index = combo.findData(selected) if selected is not None else 0
+            combo.setCurrentIndex(max(0, index))
+            combo.setEnabled(bool(self.source_rows))
+        finally:
+            combo.blockSignals(blocked)
+        self._filter_inspector_tracks()
+
+    def _clear_detail(self, message: str | None):
+        # A QButtonGroup parented to MainWindow used to survive every episode
+        # rebuild. Drop its ownership and old widgets together.
+        if self._master_radio_group is not None:
+            self._master_radio_group.deleteLater()
+            self._master_radio_group = None
         while self.detail_layout.count():
             item = self.detail_layout.takeAt(0)
             widget = item.widget()
             if widget:
+                widget.hide()
                 widget.deleteLater()
-        label = QLabel(message)
-        label.setObjectName("mutedText")
-        label.setWordWrap(True)
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.detail_layout.addWidget(label)
-        self.detail_layout.addStretch(1)
         self.source_rows.clear()
+        self._update_inspector_tracks()
+        if message is not None:
+            label = QLabel(message)
+            label.setObjectName("mutedText")
+            label.setWordWrap(True)
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.detail_layout.addWidget(label)
+            self.detail_layout.addStretch(1)
 
     def _render_group(self, group: EpisodeGroup):
         # Automatically use the smallest video file as picture master to minimize
@@ -3940,13 +3978,8 @@ class MainWindow(QMainWindow):
         if manual_master in group.files and manual_master in self.media_cache:
             if self.media_cache[manual_master].video:
                 self.selected_master = manual_master
-        self._clear_detail("")
-        while self.detail_layout.count():
-            item = self.detail_layout.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.deleteLater()
-        self.source_rows = {}
+        selected_inspector_path = self.inspector_track_filter.currentData()
+        self._clear_detail(None)
         self.detail_heading.setText(group.display_name)
         total_duration = max((self.media_cache[p].duration for p in group.files if p in self.media_cache), default=0)
         master_info = self.media_cache.get(self.selected_master or "")
@@ -3996,7 +4029,8 @@ class MainWindow(QMainWindow):
         auto_master_button.clicked.connect(lambda _checked=False, key=group.key: self._reset_master_override(key))
         self.detail_layout.addWidget(auto_master_button)
 
-        radios = QButtonGroup(self)
+        radios = QButtonGroup(self.detail_content)
+        self._master_radio_group = radios
         radios.setExclusive(True)
         for index, path in enumerate(group.files):
             info = self.media_cache.get(path)
@@ -4066,6 +4100,7 @@ class MainWindow(QMainWindow):
             row.trackChanged.connect(lambda _unused=None, source_path=path: self._on_track_changed(source_path))
 
         self.detail_layout.addStretch(1)
+        self._update_inspector_tracks(selected_inspector_path)
         self._refresh_track_actions()
         self.review_panel.show_group(group, self.selected_master, self.media_cache,
                                      self._review_alignments())
@@ -5237,6 +5272,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "library_empty_action"):
             self.library_empty_action.setEnabled(enabled)
         self.detail_scroll.setEnabled(enabled)
+        self.inspector_track_filter.setEnabled(enabled and bool(self.source_rows))
         if hasattr(self, "profile_quick_combo"):
             self.profile_quick_combo.setEnabled(enabled)
         if hasattr(self, "queue_room"):
