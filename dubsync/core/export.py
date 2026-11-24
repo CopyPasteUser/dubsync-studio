@@ -11,6 +11,7 @@ from typing import Callable
 from .models import AlignmentResult, MediaInfo, TrackChoice, validate_timeline_layout
 from .languages import normalize_language_code
 from .audio_filters import delay_filter
+from .export_process import MuxCancelled, check_cancelled, promote_output, run_mux
 from .probe import MediaToolError, probe_media, require_media_tools
 from .subtitles import SubtitleError, SubtitleOptions, prepare_subtitles
 
@@ -133,6 +134,8 @@ def export_multilingual(
     the master timeline. Complex edit differences are surfaced by alignment warnings;
     they are not silently claimed to be corrected by this affine export stage.
     """
+    if cancel_event is not None and cancel_event.is_set():
+        raise ExportError("Export wurde abgebrochen.")
     ffmpeg, _ = require_media_tools()
     audio_bitrate_kbps = max(64, min(320, int(audio_bitrate_kbps)))
     master = Path(master_path).expanduser().resolve()
@@ -160,7 +163,9 @@ def export_multilingual(
             raise ExportError(f"Audiodatei nicht gefunden: {source}")
         if track.alignment is None:
             raise ExportError(f"Keine Synchronisationsanalyse für {source.name} vorhanden.")
-        if Path(track.alignment.target_path).resolve() != master:
+        if Path(track.alignment.source_path).expanduser().resolve() != source:
+            raise ExportError(f"Synchronisationsanalyse gehört nicht zur ausgewählten Quelle: {source.name}")
+        if Path(track.alignment.target_path).expanduser().resolve() != master:
             raise ExportError(f"Synchronisationsanalyse gehört nicht zum ausgewählten Master: {source.name}")
         if not track.alignment.safe_for_automatic_export and not allow_low_confidence:
             raise ExportError(
@@ -280,44 +285,26 @@ def export_multilingual(
 
     if progress:
         progress(0, "Starte FFmpeg-Muxing …")
-    stderr_file = tempfile.NamedTemporaryFile(prefix="dubsync-ffmpeg-", suffix=".log", delete=False)
-    stderr_name = stderr_file.name
-    process = None
-    try:
-        with stderr_file:
-            process = subprocess.Popen(
-                command, stdout=subprocess.PIPE, stderr=stderr_file,
-                stdin=subprocess.DEVNULL, text=True, bufsize=1,
-            )
-            if process.stdout is not None:
-                try:
-                    for line in process.stdout:
-                        if cancel_event is not None and cancel_event.is_set():
-                            process.terminate()
-                            try:
-                                process.wait(timeout=3)
-                            except subprocess.TimeoutExpired:
-                                process.kill()
-                                process.wait()
-                            raise ExportError("Export wurde abgebrochen.")
-                        key, sep, value = line.strip().partition("=")
-                        if not sep or not progress:
-                            continue
-                        if key in {"out_time_us", "out_time_ms"}:
-                            try:
-                                seconds = float(value) / 1_000_000.0
-                                percent = min(99, max(0, int(100 * seconds / master_info.duration)))
-                                progress(percent, "Untertitelspur und Audios muxen …"
-                                         if include_subtitles else "Muxing und Synchronisation …")
-                            except (ValueError, ZeroDivisionError):
-                                pass
-                finally:
-                    process.stdout.close()
-            return_code = process.wait()
-        if return_code != 0:
-            log_text = Path(stderr_name).read_text(encoding="utf-8", errors="replace")[-5000:]
-            raise ExportError("FFmpeg-Export fehlgeschlagen:\n" + log_text)
+    def progress_line(line: str) -> None:
+        key, sep, value = line.strip().partition("=")
+        if not sep or not progress or key not in {"out_time_us", "out_time_ms"}:
+            return
+        try:
+            seconds = float(value) / 1_000_000.0
+            percent = min(99, max(0, int(100 * seconds / master_info.duration)))
+        except (ValueError, OverflowError, ZeroDivisionError):
+            return
+        progress(percent, "Untertitelspur und Audios muxen …"
+                 if include_subtitles else "Muxing und Synchronisation …")
 
+    try:
+        with tempfile.TemporaryFile(mode="w+b") as log:
+            return_code = run_mux(command, log, progress_line, cancel_event)
+            if return_code != 0:
+                log.seek(max(0, log.seek(0, os.SEEK_END) - 5000))
+                log_text = log.read(5000).decode("utf-8", errors="replace")
+                raise ExportError("FFmpeg-Export fehlgeschlagen:\n" + log_text)
+        check_cancelled(cancel_event)
         if not temporary.is_file() or temporary.stat().st_size < 1024:
             raise ExportError("FFmpeg hat keine plausible Ausgabedatei erzeugt.")
         if progress:
@@ -325,25 +312,23 @@ def export_multilingual(
         checked = probe_media(str(temporary))
         _verify_mux_output(master_info, checked, len(selected), added_subtitles=int(include_subtitles))
 
-        if output.exists() and not overwrite:
-            raise ExportError(f"Die Ausgabedatei existiert inzwischen: {output}")
-        os.replace(temporary, output)
+        check_cancelled(cancel_event)
+        try:
+            promote_output(temporary, output, overwrite=overwrite)
+        except FileExistsError as exc:
+            raise ExportError(f"Die Ausgabedatei existiert inzwischen: {output}") from exc
         if progress:
             progress(100, "Export geprüft und abgeschlossen.")
         return str(output)
+    except MuxCancelled as exc:
+        raise ExportError(str(exc)) from exc
     except OSError as exc:
         raise ExportError(f"Datei- oder Prozessfehler beim Export: {exc}") from exc
     finally:
         if subtitle_directory is not None:
             subtitle_directory.cleanup()
-        if process is not None and process.poll() is None:
-            process.terminate()
         if temporary.exists():
             try:
                 temporary.unlink()
             except OSError:
                 pass
-        try:
-            Path(stderr_name).unlink(missing_ok=True)
-        except OSError:
-            pass
