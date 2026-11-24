@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Callable, Any
 
 from PySide6.QtCore import Qt, QThread, Signal, QSettings, QSize, QTimer, QUrl
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QDesktopServices
+from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QIcon, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLayout, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QFileDialog, QListWidget, QListWidgetItem,
@@ -29,7 +29,8 @@ from PySide6.QtWidgets import (
     QButtonGroup, QSizePolicy, QDialog, QDialogButtonBox, QSpinBox, QInputDialog, QMenu,
 )
 
-from dubsync.gui.theme import studio_stylesheet
+from dubsync.gui.theme import apply_appearance, studio_stylesheet
+from dubsync.gui.appearance import normalize_appearance
 from dubsync.gui.task_worker import NamedCancelEvent, TaskWorker
 from dubsync.gui.plots import ProgressHistoryPlot, AlignmentResidualPlot
 from dubsync.gui.source_list import SourceDropList
@@ -1316,7 +1317,7 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(20, 14, 20, 10)
+        root.setContentsMargins(12, 8, 12, 6)
         root.setSpacing(10)
 
         header = QHBoxLayout()
@@ -1597,11 +1598,11 @@ class MainWindow(QMainWindow):
         splitter.setChildrenCollapsible(False)
 
         left = QFrame()
-        left.setObjectName("panel")
+        left.setObjectName("librarySidebar")
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(14, 14, 14, 14)
         left_layout.setSpacing(10)
-        left_layout.addWidget(self._section_title("Episoden", "Fassungen rechts abgleichen."))
+        left_layout.addWidget(self._section_title("Bibliothek", "Episode auswählen"))
         self.root_hint = QLabel("Ordner oder Videodateien hier hineinziehen · NAS über die Quellenleiste hinzufügen")
         self.root_hint.setObjectName("dropHint")
         self.root_hint.setWordWrap(True)
@@ -1644,11 +1645,12 @@ class MainWindow(QMainWindow):
         left_layout.addLayout(filter_row)
 
         self.episode_table = QTableWidget(0, 4)
+        self.episode_table.setObjectName("episodeLibrary")
         self.episode_table.setHorizontalHeaderLabels(["Episode / Gruppe", "Dateien", "Sprachen", "Status"])
         self.episode_table.setAccessibleName("Erkannte Serien und Episoden")
         self.episode_table.setAccessibleDescription("Wähle eine Episode, um Bildmaster, Audiospuren und Synchronisationsqualität zu konfigurieren.")
         self.episode_table.verticalHeader().setVisible(False)
-        self.episode_table.verticalHeader().setDefaultSectionSize(44)
+        self.episode_table.verticalHeader().setDefaultSectionSize(36)
         self.episode_table.horizontalHeader().setMinimumHeight(38)
         self.episode_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.episode_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -1664,12 +1666,13 @@ class MainWindow(QMainWindow):
         splitter.addWidget(left)
 
         right = QFrame()
-        right.setObjectName("panel")
+        right.setObjectName("trackInspector")
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(14, 14, 14, 14)
         right_layout.setSpacing(10)
         self.detail_heading = QLabel("Episode einrichten")
         self.detail_heading.setObjectName("sectionTitle")
+        right_layout.addWidget(self._sidebar_caption("INSPECTOR"))
         right_layout.addWidget(self.detail_heading)
         self.detail_description = QLabel("Wähle links eine Gruppe aus. Bestimme anschließend das Referenzvideo und die hinzuzufügenden Audiospuren.")
         self.detail_description.setObjectName("mutedText")
@@ -1781,11 +1784,11 @@ class MainWindow(QMainWindow):
         self._nav_buttons = []
         self.navigation_group = QButtonGroup(self)
         self.navigation_group.setExclusive(True)
-        for index, label in enumerate(("Studio", "Stapelzentrale", "Aktivität")):
+        for index, label in enumerate(("Bibliothek", "Stapel", "Aktivität")):
             button = QPushButton(label)
             button.setObjectName("navButton")
             button.setCheckable(True)
-            button.setMinimumWidth(130)
+            button.setMinimumWidth(100)
             button.setMinimumHeight(34)
             button.setAccessibleName(label)
             button.setShortcut(f"Alt+{index + 1}")
@@ -1802,6 +1805,15 @@ class MainWindow(QMainWindow):
         self.review_focus_button.setAccessibleName("Vergleich vergrößern")
         self.review_focus_button.toggled.connect(self._set_review_focus)
         nav.addWidget(self.review_focus_button)
+        self.inspector_toggle = QPushButton("Inspector")
+        self.inspector_toggle.setObjectName("viewToggleButton")
+        self.inspector_toggle.setCheckable(True)
+        self.inspector_toggle.setChecked(True)
+        self.inspector_toggle.setShortcut("Alt+I")
+        self.inspector_toggle.setAccessibleName("Spur-Inspector ein- oder ausblenden")
+        self.inspector_toggle.setToolTip("Spur-Inspector ein- oder ausblenden · Alt+I")
+        self.inspector_toggle.toggled.connect(self._set_inspector_visible)
+        nav.addWidget(self.inspector_toggle)
         nav.addStretch(1)
         self.sidebar_state = QLabel("Neue Sitzung")
         self.sidebar_state.setObjectName("mutedText")
@@ -1870,9 +1882,10 @@ class MainWindow(QMainWindow):
         review_scroll.setWidget(self.review_panel)
         review_scroll.setMinimumWidth(290)
         splitter.insertWidget(1, review_scroll)
-        splitter.setSizes([310, 435, 515])
+        splitter.setSizes([285, 565, 410])
         self.studio_splitter = splitter
         self._splitter_state_before_focus = None
+        self._splitter_state_before_inspector = None
 
         # Page 1: real three-pane review desk, one episode at a time.
         library = QWidget()
@@ -1884,11 +1897,11 @@ class MainWindow(QMainWindow):
         )
         lib.addWidget(self.library_heading)
         lib.addWidget(source_panel)
-        lib.addWidget(splitter, 1)
         for button in (self.diagnostic_button, self.batch_diagnostic_button):
             button.parentWidget().layout().removeWidget(button)
             button.hide()
         lib.addLayout(action_row)
+        lib.addWidget(splitter, 1)
         continue_row = QHBoxLayout()
         self.library_status = QLabel("Noch keine Quellen hinzugefügt")
         self.library_status.setObjectName("mutedText")
@@ -1897,7 +1910,7 @@ class MainWindow(QMainWindow):
         self.to_export_button = QPushButton("Stapel vorbereiten →")
         self.to_export_button.setObjectName("primaryButton")
         self.to_export_button.clicked.connect(lambda: self._navigate_to(1))
-        self.export_button.parentWidget().layout().addWidget(self.to_export_button)
+        continue_row.addWidget(self.to_export_button)
         lib.addLayout(continue_row)
         self.episode_surface.setMinimumHeight(110)
         # A laptop-height viewport cannot accommodate the three-pane editor,
@@ -2092,15 +2105,31 @@ class MainWindow(QMainWindow):
         for index, button in enumerate(self._nav_buttons):
             button.setChecked(index == page)
         self.review_focus_button.setVisible(page == 0)
+        self.inspector_toggle.setVisible(page == 0)
         self.statusBar().showMessage(
             ("Quellen · Framevergleich · Spuren", "Stapel und Ausgabe", "Verarbeitung und Diagnose")[page], 2500
         ) if self.statusBar() is not None else None
         if page == 1 and hasattr(self, "queue_room"):
             self._refresh_inline_queue()
 
+    def _set_inspector_visible(self, visible: bool):
+        """Hide only the inspector; retain the editor widgets and values."""
+        splitter = self.studio_splitter
+        if self.review_focus_button.isChecked():
+            return
+        if visible:
+            splitter.widget(2).show()
+            if self._splitter_state_before_inspector is not None:
+                splitter.restoreState(self._splitter_state_before_inspector)
+            self._splitter_state_before_inspector = None
+        else:
+            self._splitter_state_before_inspector = splitter.saveState()
+            splitter.widget(2).hide()
+
     def _set_review_focus(self, focused: bool):
         """Expand the evidence monitor without rebuilding the episode editor."""
         splitter = self.studio_splitter
+        self.inspector_toggle.setEnabled(not focused)
         if focused:
             self._splitter_state_before_focus = splitter.saveState()
             splitter.widget(0).hide()
@@ -2113,6 +2142,8 @@ class MainWindow(QMainWindow):
             if self._splitter_state_before_focus is not None:
                 splitter.restoreState(self._splitter_state_before_focus)
             self._splitter_state_before_focus = None
+            if not self.inspector_toggle.isChecked():
+                splitter.widget(2).hide()
             label = "Vergleich vergrößern"
             hint = "Vergleich ohne Episodenliste und Spureditor anzeigen · Alt+0"
         self.review_focus_button.setText(label)
@@ -2404,6 +2435,17 @@ class MainWindow(QMainWindow):
         contrast_action.setToolTip("Erhöht Kontrast und Konturen für bessere Lesbarkeit.")
         contrast_action.toggled.connect(self._toggle_high_contrast)
         settings_menu.addAction(contrast_action)
+        appearance_menu = settings_menu.addMenu("Erscheinungsbild")
+        self.appearance_group = QActionGroup(self)
+        self.appearance_group.setExclusive(True)
+        for mode, title in (("light", "Hell"), ("dark", "Dunkel")):
+            action = QAction(title, self)
+            action.setCheckable(True)
+            action.setData(mode)
+            action.setChecked(normalize_appearance(self.settings.get("appearance")) == mode)
+            self.appearance_group.addAction(action)
+            action.triggered.connect(lambda checked, value=mode: self._set_appearance(value) if checked else None)
+            appearance_menu.addAction(action)
         settings_menu.addSeparator()
         performance_action = QAction("Leistung & Analyse…", self)
         performance_action.triggered.connect(self._open_settings)
@@ -2754,7 +2796,10 @@ class MainWindow(QMainWindow):
         return box
 
     def _stylesheet(self) -> str:
-        return studio_stylesheet(self.settings.get("high_contrast", False))
+        mode = normalize_appearance(self.settings.get("appearance"))
+        contrast = bool(self.settings.get("high_contrast", False))
+        apply_appearance(mode, contrast)
+        return studio_stylesheet(contrast, appearance=mode)
 
     def _update_tool_status(self):
         try:
@@ -2879,10 +2924,20 @@ class MainWindow(QMainWindow):
         elif chosen == remove_action:
             self.remove_folder()
 
+    def _set_appearance(self, appearance: str):
+        mode = normalize_appearance(appearance)
+        self.settings["appearance"] = mode
+        for action in self.appearance_group.actions():
+            action.setChecked(action.data() == mode)
+        self.setStyleSheet(self._stylesheet())
+        for widget in self.findChildren(QWidget):
+            widget.update()
+        # Appearance is a preference, not a project modification.
+        save_settings(persistent_preferences(self.settings))
+
     def _toggle_high_contrast(self, enabled: bool):
         self.settings["high_contrast"] = bool(enabled)
-        self.setStyleSheet(self._stylesheet())
-        self._save_settings()
+        self._set_appearance(normalize_appearance(self.settings.get("appearance")))
         self.statusBar().showMessage("Hoher Kontrast aktiviert" if enabled else "Standardkontrast aktiviert", 4000)
 
     def _add_source_root(self, directory: str):
