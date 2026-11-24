@@ -8,9 +8,9 @@ import threading
 import unittest
 
 from dubsync.core.export import ExportError, export_multilingual
-from dubsync.core.models import AlignmentResult, Anchor, TrackChoice
+from dubsync.core.models import AlignmentResult, Anchor, TrackChoice, TimelineSegment
 from dubsync.core.probe import probe_media
-from scripts.benchmark_export import benchmark, file_sha256
+from scripts.benchmark_export import benchmark, file_sha256, packet_timing_evidence, continuous_added_audio
 
 
 @unittest.skipUnless(shutil.which('ffmpeg') and shutil.which('ffprobe'), 'Media tools required')
@@ -87,3 +87,34 @@ class ExportEndToEndTests(unittest.TestCase):
         self.assertEqual(export_multilingual(str(self.master), [self.track], str(self.output), progress=report),
                          str(self.output))
         self.assertEqual(probe_media(str(self.output)).audio_streams, 2)
+
+
+    def test_delayed_sections_keep_continuous_clock_and_unmatched_silence(self):
+        import array
+        for segments, quiet, audible in (
+            ([TimelineSegment(0, 7, 1, 8, 14, 0, 0, 14)], (0.25, 8.5), (2., 6.)),
+            ([TimelineSegment(0, 3, 1, 4, 10, 0, 0, 10),
+              TimelineSegment(4, 7, 6, 9, 10, 0, 0, 10)], (0.25, 5., 9.5), (2., 7.)),
+        ):
+            with self.subTest(sections=len(segments)):
+                self.result.segments = segments
+                self.result.manual_segments = True
+                export_multilingual(str(self.master), [self.track], str(self.output),
+                                    allow_low_confidence=True, overwrite=True)
+                timing = packet_timing_evidence('ffprobe', self.output)
+                self.assertTrue(continuous_added_audio(timing, self.result.target_duration, [2]), timing)
+                raw = subprocess.check_output(['ffmpeg', '-v', 'error', '-i', str(self.output),
+                    '-map', '0:a:1', '-ac', '1', '-ar', '48000', '-f', 's16le', '-'], timeout=20)
+                samples = array.array('h')
+                samples.frombytes(raw)
+                if sys.byteorder != 'little':
+                    samples.byteswap()
+                def rms(at):
+                    start = round(at * 48000)
+                    values = samples[start:start + 9600]
+                    self.assertEqual(len(values), 9600)
+                    return (sum(x*x for x in values) / len(values)) ** .5
+                for at in quiet:
+                    self.assertLess(rms(at), 30)
+                for at in audible:
+                    self.assertGreater(rms(at), 100)

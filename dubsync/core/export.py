@@ -88,7 +88,7 @@ def _piecewise_audio_filters(input_index: int, audio_ordinal: int, label: str,
             f"atrim=duration={_filter_number(duration)},asetpts=PTS-STARTPTS,"
             f"afade=t=in:st=0:d={_filter_number(fade)},"
             f"afade=t=out:st={_filter_number(duration - fade)}:d={_filter_number(fade)},"
-            f"adelay={max(0, round(part.target_start * 1000))}:all=1,"
+            f"{delay_filter(max(0, round(part.target_start * 1000)))}"
             f"apad,atrim=duration={_filter_number(master_duration)}[{label}]"
         ]
     sources = [f"{label}source{index}" for index in range(count)]
@@ -105,7 +105,7 @@ def _piecewise_audio_filters(input_index: int, audio_ordinal: int, label: str,
             f"atrim=duration={_filter_number(duration)},asetpts=PTS-STARTPTS,"
             f"afade=t=in:st=0:d={_filter_number(fade)},"
             f"afade=t=out:st={_filter_number(duration - fade)}:d={_filter_number(fade)},"
-            f"adelay={max(0, round(part.target_start * 1000))}:all=1[{outputs[index]}]"
+            f"{delay_filter(max(0, round(part.target_start * 1000)))}anull[{outputs[index]}]"
         )
     steps.append("".join(f"[{item}]" for item in outputs)
                  + f"amix=inputs={count}:duration=longest:normalize=0,"
