@@ -2,11 +2,13 @@
 from copy import deepcopy
 import json
 import sys
+import subprocess
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.acceptance_4_0 import Acceptance, StepFailed, compare_alignment, junit_summary
+from scripts.acceptance_4_0 import Acceptance, StepFailed, compare_alignment, junit_summary, git, worktree
 
 
 class AcceptanceTests(unittest.TestCase):
@@ -43,3 +45,33 @@ class AcceptanceTests(unittest.TestCase):
                            '<testcase classname="x" name="bad"><failure/></testcase></testsuite></testsuites>')
             self.assertEqual(junit_summary(xml), {'total': 3, 'failed': 1,
                 'skipped': [{'name': 'x.skip', 'reason': 'reason'}]})
+
+
+    @unittest.skipUnless(shutil.which("git"), "Git required")
+    def test_detached_worktree_is_removed_and_original_unchanged(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "repo"
+            root.mkdir()
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            (root / "source").write_text("original")
+            subprocess.run(["git", "-C", str(root), "add", "source"], check=True)
+            subprocess.run(["git", "-C", str(root), "-c", "user.name=QA", "-c", "user.email=qa@example.invalid",
+                            "commit", "-qm", "fixture [skip ci]"], check=True)
+            revision = git(root, "rev-parse", "HEAD")
+            destination = Path(d) / "isolated"
+            with worktree(root, revision, destination) as checkout:
+                self.assertEqual(git(checkout, "rev-parse", "HEAD"), revision)
+                (checkout / "source").write_text("modified fixture")
+            self.assertFalse(destination.exists())
+            self.assertEqual((root / "source").read_text(), "original")
+            self.assertEqual(git(root, "status", "--porcelain"), "")
+
+    def test_timed_out_step_is_failed(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            acceptance = Acceptance(root)
+            with self.assertRaises(subprocess.TimeoutExpired):
+                acceptance.step("timeout", [sys.executable, "-c", "import time; time.sleep(30)"], root, timeout=1)
+            payload = json.loads((root / "manifest.json").read_text())
+            self.assertEqual(payload["steps"][0]["status"], "failed")
+            self.assertFalse(payload["release_authorized"])
