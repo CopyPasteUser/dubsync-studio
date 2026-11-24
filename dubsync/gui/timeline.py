@@ -85,7 +85,7 @@ class AlignmentTimeline(QWidget):
         painter.drawText(15, 18, "BILDMASTER · ZEITACHSE")
         manual = bool(self.alignment and self.alignment.manual_segments)
         painter.drawText(15, 90, "MANUELL · NICHT VERIFIZIERT" if manual else
-                         "MINT: BILDPROBEN · GELB: UNGEPRÜFT · DUNKEL: OHNE ZUORDNUNG")
+                         "BILDPROBEN · UNGEPRÜFT · OHNE ZUORDNUNG")
         painter.fillRect(QRectF(15, 96, width, 8), QColor(TOKENS["raised"]))
         for span in self.evidence:
             left = max(15.0, self._x(span.start, width))
