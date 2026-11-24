@@ -56,6 +56,7 @@ class BaselineTests(unittest.TestCase):
             before = [hashlib.sha256(path.read_bytes()).hexdigest() for path in (source, master)]
             report = alignment_suite(root, parse_args([str(source), str(master), "--repeat", "1"]))
             self.assertTrue(report["evidence_identical"])
+            self.assertRegex(report["evidence_sha256"], r"^[0-9a-f]{64}$")
             self.assertTrue(report["runs"]["cold"][0]["safe_for_automatic_export"])
             for side in ("source", "master"):
                 self.assertEqual(report["runs"]["warm"][0]["sampling"][side]["status"], "cache_hit")
