@@ -88,6 +88,33 @@ class FFmpegSamplingTests(unittest.TestCase):
                               cancel_event=event)
             process.assert_not_called()
 
+    def test_auto_qualifies_gpu_with_actual_decoder_thread_budget(self):
+        from dubsync.core.alignment import sample_video
+        fast = {"cpu": {"frames": 10, "samples_per_second": 10},
+                "cuda": {"frames": 10, "samples_per_second": 30,
+                         "frame_match_ratio": 1.0, "median_hamming_to_cpu": 0}}
+        with (mock.patch("dubsync.core.alignment.gpu_decode_candidates",
+                         return_value=[DecoderCandidate("cuda", "cuda")]),
+              mock.patch("dubsync.core.alignment.is_network_path", return_value=False),
+              mock.patch("dubsync.core.alignment.benchmark_decoder_candidates",
+                         return_value=fast) as benchmark,
+              mock.patch("dubsync.core.alignment.ffmpeg_sample",
+                         return_value=[(i * .5, i) for i in range(12)]) as sample):
+            sample_video(str(self.path), 60., .5, decode_threads=2)
+            self.assertEqual(benchmark.call_args.kwargs["decode_threads"], 2)
+            self.assertEqual(sample.call_args.kwargs["decode_threads"], 2)
+
+    def test_qualification_passes_thread_budget_to_cpu_and_gpu(self):
+        frames = [(i * .5, i) for i in range(8)]
+        with mock.patch("dubsync.core.ffmpeg_sampling.ffmpeg_sample",
+                        return_value=frames) as sample:
+            benchmark_decoder_candidates(str(self.path), 60., .5, lambda frame: 42,
+                                         candidates=[DecoderCandidate("cuda", "cuda")],
+                                         decode_threads=2)
+        self.assertEqual(len(sample.call_args_list), 2)
+        self.assertTrue(all(call.kwargs["decode_threads"] == 2
+                            for call in sample.call_args_list))
+
     def test_auto_uses_fast_verified_gpu_only(self):
         from dubsync.core.alignment import sample_video
         fast = {"cpu": {"frames": 10, "samples_per_second": 10},

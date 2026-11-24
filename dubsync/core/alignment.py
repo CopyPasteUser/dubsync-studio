@@ -178,7 +178,8 @@ def sample_video(path: str, duration: float, interval: float = 0.5,
                     benchmark = benchmark_decoder_candidates(
                         path, duration, interval, perceptual_hash,
                         candidates=measured_candidates, cancel_event=cancel_event,
-                        seconds=probe_seconds, probe_starts=probe_starts)
+                        seconds=probe_seconds, probe_starts=probe_starts,
+                        decode_threads=decode_threads)
                     gpu_probe_seconds = time.monotonic() - probe_started
                     winner = choose_verified_decoder(benchmark, measured_candidates)
                     if winner is not None:
