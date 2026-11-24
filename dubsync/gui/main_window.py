@@ -50,7 +50,7 @@ from dubsync.core.cache import AlignmentCache
 from dubsync.core.session import persistent_preferences
 from dubsync.core.export import ExportError, export_multilingual
 from dubsync.core.export_preflight import inspect_single_export
-from dubsync.core.subtitles import SubtitleOptions
+from dubsync.core.subtitle_options import SubtitleOptions
 from dubsync.core.fingerprint import fingerprint_many
 from dubsync.core.models import (AlignmentResult, EpisodeGroup, MediaInfo, TrackChoice,
                                  TimelineSegment, validate_timeline_layout)

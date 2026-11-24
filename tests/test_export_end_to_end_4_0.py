@@ -1,6 +1,7 @@
 """Production exporter checks with synthetic owned media, no network or subtitles."""
 from pathlib import Path
 import shutil
+import sys
 import subprocess
 import tempfile
 import threading
@@ -71,3 +72,18 @@ class ExportEndToEndTests(unittest.TestCase):
         self.assertTrue(all(row['continuous_added_audio'] for row in report['observations']))
         self.assertEqual(len(report['evidence']['audio']), 4)
         self.assertLessEqual(report['evidence']['packet_timing']['4']['max_gap_s'], .004)
+
+
+    def test_off_mode_does_not_load_subtitle_backend(self):
+        # Fresh interpreter checks the actual import graph, not a cached module.
+        subprocess.run([sys.executable, '-c',
+            'import sys; from dubsync.core.export import export_multilingual; '
+            'assert "dubsync.core.subtitles" not in sys.modules'], check=True, timeout=30)
+
+    def test_post_commit_callback_error_does_not_report_failed_export(self):
+        def report(percent, _message):
+            if percent == 100:
+                raise RuntimeError('late cancellation notification')
+        self.assertEqual(export_multilingual(str(self.master), [self.track], str(self.output), progress=report),
+                         str(self.output))
+        self.assertEqual(probe_media(str(self.output)).audio_streams, 2)

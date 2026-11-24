@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import json
+import logging
 import os
-import subprocess
 import tempfile
 import uuid
 from pathlib import Path
@@ -12,8 +11,8 @@ from .models import AlignmentResult, MediaInfo, TrackChoice, validate_timeline_l
 from .languages import normalize_language_code
 from .audio_filters import delay_filter
 from .export_process import MuxCancelled, check_cancelled, promote_output, run_mux
-from .probe import MediaToolError, probe_media, require_media_tools
-from .subtitles import SubtitleError, SubtitleOptions, prepare_subtitles
+from .probe import probe_media, require_media_tools
+from .subtitle_options import SubtitleError, SubtitleOptions
 
 Progress = Callable[[int, str], None]
 
@@ -245,6 +244,8 @@ def export_multilingual(
     subtitle_directory = None
     try:
         if include_subtitles:
+            from .subtitles import prepare_subtitles
+
             subtitle_directory = tempfile.TemporaryDirectory(prefix="dubsync-sub-")
             if progress:
                 progress(0, "Untertitel suchen / erzeugen …")
@@ -256,6 +257,10 @@ def export_multilingual(
         if subtitle_directory is not None:
             subtitle_directory.cleanup()
         raise ExportError(f"Untertitel konnten nicht vorbereitet werden: {exc}") from exc
+    except BaseException:
+        if subtitle_directory is not None:
+            subtitle_directory.cleanup()
+        raise
 
     command += input_args
     command += ["-map", "0:v:0", "-map", "0:a?", "-map", "0:s?", "-map", "0:t?"]
@@ -283,8 +288,6 @@ def export_multilingual(
         first_map = command.index("-map")
         command[first_map:first_map] = ["-filter_complex", ";".join(filters)]
 
-    if progress:
-        progress(0, "Starte FFmpeg-Muxing …")
     def progress_line(line: str) -> None:
         key, sep, value = line.strip().partition("=")
         if not sep or not progress or key not in {"out_time_us", "out_time_ms"}:
@@ -298,6 +301,8 @@ def export_multilingual(
                  if include_subtitles else "Muxing und Synchronisation …")
 
     try:
+        if progress:
+            progress(0, "Starte FFmpeg-Muxing …")
         with tempfile.TemporaryFile(mode="w+b") as log:
             return_code = run_mux(command, log, progress_line, cancel_event)
             if return_code != 0:
@@ -318,7 +323,12 @@ def export_multilingual(
         except FileExistsError as exc:
             raise ExportError(f"Die Ausgabedatei existiert inzwischen: {output}") from exc
         if progress:
-            progress(100, "Export geprüft und abgeschlossen.")
+            try:
+                progress(100, "Export geprüft und abgeschlossen.")
+            except Exception:
+                # Publication is the commit point: a late callback failure
+                # must not report a successfully published export as failed.
+                logging.getLogger("dubsync").exception("Fortschrittsmeldung nach Export fehlgeschlagen")
         return str(output)
     except MuxCancelled as exc:
         raise ExportError(str(exc)) from exc

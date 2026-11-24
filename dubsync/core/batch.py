@@ -19,7 +19,7 @@ from .network import is_network_path
 from .cache import AlignmentCache
 from .frame_cache import FrameSampleCache
 from .export import export_multilingual
-from .subtitles import SubtitleOptions
+from .subtitle_options import SubtitleOptions
 from .models import EpisodeGroup, MediaInfo, TrackChoice
 from .languages import normalize_language_code, resolve_track_label
 from .probe import MediaToolError, choose_default_audio, probe_media, probe_many
