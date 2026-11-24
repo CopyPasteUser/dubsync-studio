@@ -37,7 +37,9 @@ class AlignmentTimeline(QWidget):
         self.setMinimumHeight(125)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAccessibleName("Synchronisations-Timeline")
-        self.setToolTip("Klick: Position · Pfeiltasten: ±5 s · Bild auf/ab: ±30 s · Plus/Minus: Zoom")
+        self.setAccessibleDescription("Blau: Bildproben. Orange: ungeprüft. Grau: ohne Zuordnung. Manuelle Schnitte sind nicht verifiziert.")
+        self.setToolTip("Blau: Bildproben · Orange: ungeprüft · Grau: ohne Zuordnung\n"
+                        "Klick: Position · Pfeiltasten: ±5 s · Bild auf/ab: ±30 s · Plus/Minus: Zoom")
 
     def set_data(self, duration: float, alignment: AlignmentResult | None) -> None:
         self.duration = max(0.0, float(duration))
@@ -84,8 +86,10 @@ class AlignmentTimeline(QWidget):
         painter.setFont(QFont("Noto Sans", 9))
         painter.drawText(15, 18, "BILDMASTER · ZEITACHSE")
         manual = bool(self.alignment and self.alignment.manual_segments)
-        painter.drawText(15, 90, "MANUELL · NICHT VERIFIZIERT" if manual else
-                         "BILDPROBEN · UNGEPRÜFT · OHNE ZUORDNUNG")
+        legend = ("MANUELL · NICHT VERIFIZIERT" if manual else
+                  "Blau: Bildproben · Orange: ungeprüft · Grau: ohne Zuordnung")
+        painter.drawText(15, 90, painter.fontMetrics().elidedText(
+            legend, Qt.TextElideMode.ElideRight, int(width)))
         painter.fillRect(QRectF(15, 96, width, 8), QColor(TOKENS["raised"]))
         for span in self.evidence:
             left = max(15.0, self._x(span.start, width))
