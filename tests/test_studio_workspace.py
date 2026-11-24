@@ -275,3 +275,28 @@ def test_appearance_change_is_not_project_edit(window):
     window._set_appearance("light")
     assert load_settings()["appearance"] == "light"
     assert window.project_dirty == dirty
+
+
+def test_inspector_filter_is_display_only_and_rebuild_cleans_radio_group(window):
+    group = EpisodeGroup("sample", "Synthetic", ["/tmp/master.mkv", "/tmp/dub.mkv"])
+    window.selected_group = group
+    window.media_cache = {
+        path: MediaInfo(path, 120, "matroska", 1000 + i,
+                        [StreamInfo(0, "video", codec_name="h264"),
+                         StreamInfo(1, "audio", language="eng", channels=2)],
+                        1, 1, 0)
+        for i, path in enumerate(group.files)
+    }
+    window._render_group(group)
+    original = window._master_radio_group
+    active = list(window._active_track_rows())
+    window.inspector_track_filter.setCurrentIndex(
+        window.inspector_track_filter.findData(group.files[1]))
+    assert window.source_rows[group.files[0]].isHidden()
+    assert not window.source_rows[group.files[1]].isHidden()
+    assert list(window._active_track_rows()) == active
+    window._render_group(group)
+    assert window._master_radio_group is not original
+    assert window.inspector_track_filter.currentData() == group.files[1]
+    window.inspector_track_filter.setCurrentIndex(0)
+    assert all(not row.isHidden() for row in window.source_rows.values())
