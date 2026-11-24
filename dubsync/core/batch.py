@@ -13,13 +13,15 @@ from .batch_resume import (recipe_id, proof_for, load_resume_report,
                            verified_resume_entry)
 
 from .alignment import align_videos
-from .performance import cpu_decoder_threads_for_settings
+from .performance import cpu_decoder_threads_for_settings, sampling_worker_policy
+from .metadata_schedule import prefetch_missing
+from .network import is_network_path
 from .cache import AlignmentCache
 from .export import export_multilingual
 from .subtitles import SubtitleOptions
 from .models import EpisodeGroup, MediaInfo, TrackChoice
 from .languages import normalize_language_code, resolve_track_label
-from .probe import MediaToolError, choose_default_audio, probe_media
+from .probe import MediaToolError, choose_default_audio, probe_media, probe_many
 from .scanner import infer_language, episode_metadata
 
 
@@ -614,6 +616,31 @@ def batch_export_groups(
 
         try:
             journal.stage(index, "metadata", "Metadaten aus Quellen lesen")
+            # Prefetch metadata only for the current eligible episode. Never
+            # start future episodes, reuse export decisions, or parallelize NAS.
+            if sampling_workers > 1:
+                paths = [str(Path(path).expanduser().resolve()) for path in group.files]
+                missing_before = [path for path in paths if path not in known_media]
+
+                def permit_parallel(missing):
+                    if any(is_network_path(path) for path in paths):
+                        return False
+                    # FFprobe is CPU metadata work, not GPU qualification.
+                    workers, _ = sampling_worker_policy(missing[0], missing[1], 2, "ffmpeg")
+                    return workers == 2
+
+                prefetch_missing(
+                    paths, known_media, permit_parallel=permit_parallel,
+                    probe_many=lambda missing: probe_many(
+                        missing, max_workers=2, cancel_event=cancel_event),
+                    cancelled=cancelled,
+                )
+                if cancelled():
+                    raise BatchCancelled("Abbruch während der Metadatenprüfung")
+                if media_cache is not None:
+                    for path in missing_before:
+                        if path in known_media:
+                            media_cache[path] = known_media[path]
             infos = [get_info(path) for path in group.files]
             info_by_path = {str(Path(info.path).resolve()): info for info in infos}
             video_candidates = [info for info in infos if info.video]

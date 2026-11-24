@@ -137,7 +137,7 @@ stage does not imply the same end-to-end export speedup.
 
 | Topic | Details |
 | --- | --- |
-| Development and UX priorities | [Studio overhaul](docs/STUDIO_OVERHAUL.md) · [3.0 roadmap](docs/ROADMAP_NEXT.md) |
+| Development and UX priorities | [Studio overhaul](docs/STUDIO_OVERHAUL.md) · [3.0 roadmap](docs/ROADMAP_NEXT.md) · [4.0 performance and UX roadmap](docs/ROADMAP_4_0.md) |
 | Reliability and release checks | [Release checklist](docs/RELEASE_CHECKLIST.md) · [GUI verification](docs/GUI_VERIFICATION.md) |
 | Technical implementation | [Architecture](docs/ARCHITECTURE.md) · [Advanced workflows](docs/ADVANCED_WORKFLOWS.md) |
 | Changes and security | [Changelog](CHANGELOG.md) · [Security](SECURITY.md) |

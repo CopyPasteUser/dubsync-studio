@@ -10,6 +10,7 @@ from typing import Callable
 
 from .models import AlignmentResult, MediaInfo, TrackChoice, validate_timeline_layout
 from .languages import normalize_language_code
+from .audio_filters import delay_filter
 from .probe import MediaToolError, probe_media, require_media_tools
 from .subtitles import SubtitleError, SubtitleOptions, prepare_subtitles
 
@@ -219,7 +220,7 @@ def export_multilingual(
                 f"[{input_index}:a:{audio_ordinal}]aresample=48000,"
                 f"atrim=start={_filter_number(source_skip)},asetpts=PTS-STARTPTS,"
                 f"atempo={_filter_number(tempo)},"
-                f"adelay={delay_ms}:all=1,apad,"
+                f"{delay_filter(delay_ms)}apad,"
                 f"atrim=duration={_filter_number(master_info.duration)}[{label}]"
             )
             filters.append(chain)

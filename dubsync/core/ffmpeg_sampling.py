@@ -20,12 +20,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 from .performance import _cpu_count
+from .frame_transport import BATCH_FRAMES, FRAME_SIZE, frame_batches
 
 if TYPE_CHECKING:
     import numpy as np
 
 
-FRAME_SIZE = 32 * 32
 
 
 class SamplingBackendError(RuntimeError):
@@ -193,7 +193,7 @@ def ffmpeg_sample(path: str, duration: float, interval: float,
     command = _capture_command(path, interval, max_frames, accel, limit_seconds,
                                device, decode_threads, start_seconds)
     collected: list[tuple[float, int]] = []
-    chunks: queue.Queue[tuple[str, bytes | BaseException | None]] = queue.Queue(maxsize=12)
+    chunks: queue.Queue[tuple[str, bytes | BaseException | None]] = queue.Queue(maxsize=2)
     stop_reader = threading.Event()
     log = tempfile.TemporaryFile(mode="w+b")
     process: subprocess.Popen | None = None
@@ -202,9 +202,8 @@ def ffmpeg_sample(path: str, duration: float, interval: float,
     def read_frames():
         try:
             assert process is not None and process.stdout is not None
-            while not stop_reader.is_set():
-                payload = process.stdout.read(FRAME_SIZE)
-                if not payload:
+            for payload in frame_batches(process.stdout):
+                if stop_reader.is_set():
                     break
                 while not stop_reader.is_set():
                     try:
@@ -230,7 +229,7 @@ def ffmpeg_sample(path: str, duration: float, interval: float,
     try:
         process = subprocess.Popen(command, stdout=subprocess.PIPE,
                                    stderr=log, stdin=subprocess.DEVNULL,
-                                   bufsize=FRAME_SIZE * 4)
+                                   bufsize=FRAME_SIZE * BATCH_FRAMES)
         reader = threading.Thread(target=read_frames, name="dubsync-frame-reader", daemon=True)
         reader.start()
         last_activity = time.monotonic()
@@ -249,12 +248,14 @@ def ffmpeg_sample(path: str, duration: float, interval: float,
             if kind == "error":
                 raise SamplingBackendError(f"Frame-Reader fehlgeschlagen: {data}")
             assert isinstance(data, bytes)
-            if len(data) != FRAME_SIZE:
+            if len(data) % FRAME_SIZE:
                 raise SamplingBackendError("FFmpeg lieferte einen unvollständigen Videoframe.")
-            frame = np.frombuffer(data, dtype=np.uint8).reshape((32, 32))
-            collected.append((round((len(collected)) * interval, 6), fingerprint(frame)))
-            if progress and len(collected) % 20 == 0:
-                progress(side, len(collected), max_frames)
+            for frame in np.frombuffer(data, dtype=np.uint8).reshape((-1, 32, 32)):
+                if cancel_event is not None and cancel_event.is_set():
+                    raise SamplingBackendError("Videoanalyse abgebrochen.")
+                collected.append((round(len(collected) * interval, 6), fingerprint(frame)))
+                if progress and len(collected) % 20 == 0:
+                    progress(side, len(collected), max_frames)
         try:
             exit_code = process.wait(timeout=5)
         except subprocess.TimeoutExpired as exc:
@@ -303,7 +304,8 @@ def benchmark_decoder_candidates(path: str, duration: float, interval: float,
                                  fingerprint: Callable[[np.ndarray], int], *,
                                  candidates: list[DecoderCandidate], cancel_event=None,
                                  seconds: float = 8.0,
-                                 probe_starts: tuple[float, ...] = (0.0,)
+                                 probe_starts: tuple[float, ...] = (0.0,),
+                                 decode_threads: int | None = None
                                  ) -> dict[str, dict[str, float | int | str]]:
     """Compare CPU and every GPU on identical frames, without repeating CPU work.
 
@@ -330,7 +332,8 @@ def benchmark_decoder_candidates(path: str, duration: float, interval: float,
                                accel=candidate.accel if candidate else None,
                                device=candidate.device if candidate else None,
                                start_seconds=start, limit_seconds=min(seconds, duration - start),
-                               cancel_event=cancel_event, stall_timeout=15.0)
+                               cancel_event=cancel_event, stall_timeout=15.0,
+                               decode_threads=decode_threads)
         elapsed = max(0.001, time.monotonic() - started)
         if len(frames) < 4:
             raise SamplingBackendError("Zu wenige Bilder für den Decodervergleich.")
