@@ -300,3 +300,17 @@ def test_inspector_filter_is_display_only_and_rebuild_cleans_radio_group(window)
     assert window.inspector_track_filter.currentData() == group.files[1]
     window.inspector_track_filter.setCurrentIndex(0)
     assert all(not row.isHidden() for row in window.source_rows.values())
+
+
+def test_queue_view_loads_only_on_navigation(window, monkeypatch):
+    if window.batch_queue is None:
+        pytest.fail("Private test queue is unavailable")
+    calls = []
+    monkeypatch.setattr(window.batch_queue, "recent", lambda limit: calls.append(limit) or [])
+    window._navigate_to(0)
+    window._refresh_inline_queue()
+    window._navigate_to(2)
+    window._refresh_inline_queue()
+    assert calls == []
+    window._navigate_to(1)
+    assert calls == [100]
