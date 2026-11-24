@@ -1,6 +1,6 @@
 # DubSync Studio 4.0 — performance and macOS-inspired native UX
 
-Status: development plan, not a release or performance claim. Keep the Qt stack,
+Status: implementation integrated in draft PR #37; release acceptance remains open. See [current status](DEVELOPMENT_STATUS.md). Keep the Qt stack,
 Python orchestration, FFmpeg and optional Rust hot paths. Preserve all existing
 features and independent evidence/export checks. No automatic reuse of alignment
 decisions, weakened episode identity, source mutation or unattended overwrite.

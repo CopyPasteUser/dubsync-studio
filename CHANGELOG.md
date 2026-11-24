@@ -1,3 +1,23 @@
+# Unreleased · 4.0 integration candidate (2026-11-24)
+
+> Development only; not a released version. See [development status](docs/DEVELOPMENT_STATUS.md)
+> and [integration evidence](docs/INTEGRATION_4_0.md).
+
+- Added native light/dark/high-contrast themes, a quieter library and inspector,
+  compact toolbar, collapsible inspector (Alt+I) and display-only source filtering.
+- Extracted Qt components, indexed timeline anchors, deferred hidden queue refresh
+  and corrected button-group ownership on episode changes.
+- Batched FFmpeg frame transport, consistent CPU/GPU decoder thread budgets,
+  validated master fingerprint reuse, bounded metadata prefetch and compact journals.
+- Corrected reproduced audio clock discontinuities in positive-delay affine and
+  section exports. Preserved silence in unmatched sections in synthetic tests.
+- Added cancellable mux progress, atomic no-clobber output promotion, source
+  binding and lazy optional subtitle acquisition. Verified real local subtitle mux.
+- Added revision-pinned offline acceptance, cross-revision evidence comparisons,
+  isolated preferences and light/dark capture commands.
+- 82 targeted tests and 110 subtests passed cumulatively at the documented
+  evidence snapshot; full repository, Qt, Rust and hardware acceptance remain open.
+
 # Unreleased · Headless workflow and resource safety (2026-11-09)
 
 - Adaptive decoder preflight: long-form H.264/HEVC now samples one CPU/GPU

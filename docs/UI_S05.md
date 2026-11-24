@@ -1,6 +1,6 @@
 # S05 — macOS-inspired native workspace
 
-Stacked on S04 (#35). Default light appearance; dark and high contrast under
+Consolidated with S04 in integration PR #37. Default light appearance; dark and high contrast under
 Einstellungen → Erscheinungsbild / Hoher Kontrast. Semantic tokens are shared
 with the custom plots, timeline, waveform and segment editor. No blur, custom
 window chrome or new dependencies. Existing Qt controls, media handlers,
@@ -30,4 +30,6 @@ appearance persistence; not executed here.
 - Further information-density and inspector simplification after visual QA.
 
 No full checkout or PySide6 available locally. No visual acceptance, merge
-or release claim. S05 must be reviewed on top of S04 first.
+or release claim. Review S04 and S05 together on the unified integration branch.
+
+See [current appearance schematics and capture instructions](DEVELOPMENT_STATUS.md).

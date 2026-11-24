@@ -1,3 +1,15 @@
+# 4.0 candidate verification (2026-11-24)
+
+The 4.0 integration is in PR #37; see [current status](DEVELOPMENT_STATUS.md)
+and [full integration evidence](INTEGRATION_4_0.md). The gallery below documents
+**historical 3.0 beta screenshots**, not the 4.0 candidate. Actual new captures
+remain pending because PySide6/Qt6 is unavailable in the development environment.
+
+Capture into separate directories using the commands in the development status
+page. Review light/dark, compact sizing, keyboard focus, inspector interactions,
+scrolling and busy/error states before publishing. The SVG design schematics
+are documentation illustrations only, not Qt test evidence.
+
 # DubSync Studio 3.0.0b1 development verification
 
 ## Current Studio documentation captures (2026-11-09)
