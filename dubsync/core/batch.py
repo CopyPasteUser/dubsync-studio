@@ -17,6 +17,7 @@ from .performance import cpu_decoder_threads_for_settings, sampling_worker_polic
 from .metadata_schedule import prefetch_missing
 from .network import is_network_path
 from .cache import AlignmentCache
+from .frame_cache import FrameSampleCache
 from .export import export_multilingual
 from .subtitles import SubtitleOptions
 from .models import EpisodeGroup, MediaInfo, TrackChoice
@@ -724,6 +725,9 @@ def batch_export_groups(
                 master_audio_metadata[master_ordinal] = (language, title)
             tracks: list[TrackChoice] = []
             unsafe: list[str] = []
+            # Reuse only validated master fingerprints inside this episode.
+            # _sample_with_cache still checks file identity before and after each hit.
+            master_samples = (FrameSampleCache() if frame_cache_enabled and len(alternates) > 1 else None)
 
             for alternate_index, info in enumerate(alternates, 1):
                 if cancel_event is not None and cancel_event.is_set():
@@ -749,6 +753,7 @@ def batch_export_groups(
                         cpu_threads=cpu_threads,
                         source_info=info_by_path[str(Path(info.path).resolve())],
                         target_info=master_info,
+                        master_sample_cache=master_samples,
                         batch_context={"position": index, "total": total,
                                        "season": group.season_number,
                                        "episode": group.episode_number},
@@ -791,6 +796,7 @@ def batch_export_groups(
                             cpu_threads=cpu_threads,
                             source_info=info_by_path[str(Path(info.path).resolve())],
                             target_info=master_info,
+                            master_sample_cache=master_samples,
                             batch_context={"position": index, "total": total,
                                            "season": group.season_number,
                                            "episode": group.episode_number},
