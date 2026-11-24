@@ -2264,6 +2264,11 @@ class MainWindow(QMainWindow):
     def _refresh_inline_queue(self):
         if not hasattr(self, "queue_room"):
             return
+        # Keep the durable queue active but defer table construction/DB reads
+        # until the queue workspace is actually requested. _navigate_to(1)
+        # always refreshes, including after jobs finish on the Activity page.
+        if self._page_stack.currentIndex() != 1:
+            return
         if self.batch_queue is None:
             self.queue_room.show_unavailable("Warteschlange nicht verfügbar; Details im Systemprotokoll.")
             return
