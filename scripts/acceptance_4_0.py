@@ -196,6 +196,8 @@ def run(accept: Acceptance, baseline: Path, candidate: Path, repeats: int):
             samples.append(read_json(file)["result"])
         gui[label] = {key: statistics.median([sample[key] for sample in samples])
                       for key in ("startup_import_construct_show_seconds", "idle_cpu_percent_one_core")}
+        gui[label]["preprobed_episode_render_seconds"] = statistics.median(
+            [sample["preprobed_episode_render_seconds"]["median"] for sample in samples])
         pss = [sample["parent_pss_mib_after_show"] for sample in samples]
         gui[label]["parent_pss_mib_after_show"] = statistics.median(pss) if all(v is not None for v in pss) else None
     for appearance in ("light", "dark"):
