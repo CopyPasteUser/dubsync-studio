@@ -1,14 +1,15 @@
 # 4.0 candidate verification (2026-11-24)
 
 The 4.0 integration was merged into main through PR #37; see [current status](DEVELOPMENT_STATUS.md)
-and [full integration evidence](INTEGRATION_4_0.md). The gallery below documents
-**historical 3.0 beta screenshots**, not the 4.0 candidate. Actual new captures
-remain pending because PySide6/Qt6 is unavailable in the development environment.
+and [full integration evidence](INTEGRATION_4_0.md). The maintainer supplied
+[twelve actual SteamOS offscreen Qt captures](screenshots/4.0/README.md) on
+24 November 2026. All PNGs were decoded successfully; both themes contain
+review, focus, waveform, queue, performance and compact views. Dimensions:
+1440 × 900, 1440 × 1180 and 980 × 680. Compact layout remains dense.
 
-Capture into separate directories using the commands in the development status
-page. Review light/dark, compact sizing, keyboard focus, inspector interactions,
-scrolling and busy/error states before publishing. The SVG design schematics
-are documentation illustrations only, not Qt test evidence.
+This closes screenshot capture, not interactive visual acceptance. Keyboard
+focus, inspector interactions, scrolling, scaling and busy/error states on a
+physical desktop remain pending. The 3.0 captures below are historical.
 
 # DubSync Studio 3.0.0b1 development verification
 

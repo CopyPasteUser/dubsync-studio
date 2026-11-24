@@ -38,22 +38,23 @@ a claim of universal media compatibility.
 | Timeline anchor projection | 306.6× faster |
 
 These are component microbenchmarks, not whole-application speedups.
-Full alignment, Rust/Qt regression, visual screenshot review and real
+Full alignment, Rust/Qt regression, interactive visual review and real
 GPU/NAS/desktop/audio acceptance remain open. The integration PR is merged (application merge commit `d2005e09590d516ac7a113726aab8961eb933f41`); no version bump or stable release has been made.
 
-## Visual direction for 4.0
+## Actual 4.0 screenshots
 
-![4.0 light appearance — schematic, not a screenshot](design/studio-4-light.svg)
+![4.0 light appearance on SteamOS](screenshots/4.0/light/studio-review-4.png)
 
-![4.0 dark appearance — schematic, not a screenshot](design/studio-4-dark.svg)
+![4.0 dark appearance on SteamOS](screenshots/4.0/dark/studio-review-4.png)
 
-The two diagrams document the implemented palette and intended layout hierarchy.
-They are authored SVG design schematics, **not captures of the running application**.
-The actual Qt captures currently checked into `docs/screenshots/` show the
-3.0 beta (9 November 2026). The candidate could not be captured in the
-restricted development environment because PySide6/Qt6 was unavailable.
+All twelve actual offscreen Qt screenshots supplied by the maintainer on
+24 November 2026 are preserved in the [versioned gallery](screenshots/4.0/README.md).
+The 3.0 captures and earlier [light](design/studio-4-light.svg) and
+[dark](design/studio-4-dark.svg) design schematics remain historical references.
+The captures establish rendering in both appearances; they do not establish
+full interactive or physical UI acceptance. Compact layout remains dense.
 
-## Capture actual 4.0 screenshots and finish acceptance
+## Reproduce 4.0 screenshots and finish acceptance
 
 On a prepared Linux checkout of `main` with the project's
 existing dependencies installed, run from the repository root:
@@ -64,8 +65,7 @@ existing dependencies installed, run from the repository root:
 ```
 
 Review all six screenshots per mode (review, focus, waveform, queue, hardware
-presets, compact). Publish those PNGs under the new versioned directories and
-update the README gallery only after reviewing them. Do not overwrite the
+presets, compact) before replacing the versioned gallery. Do not overwrite the
 historical 3.0 captures or label a schematic as a real screenshot.
 
 For full local acceptance, use the clean `main` checkout:

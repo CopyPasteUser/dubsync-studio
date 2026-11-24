@@ -15,30 +15,23 @@ OpenCV / optional Rust · **MIT**
 > See the [current implementation and acceptance status](docs/DEVELOPMENT_STATUS.md).
 > Version metadata remains 3.0.0b1; 4.0 is not released or fully accepted.
 
-![4.0 light appearance layout schematic](docs/design/studio-4-light.svg)
+## Studio 4.0 — actual application screenshots
 
-<sub>4.0 design schematic, not a running-app screenshot. [Dark appearance and current status](docs/DEVELOPMENT_STATUS.md).</sub>
+![DubSync Studio 4.0 light appearance](docs/screenshots/4.0/light/studio-review-4.png)
 
-## 3.0 beta — actual application screenshots (9 November 2026)
+![DubSync Studio 4.0 dark appearance](docs/screenshots/4.0/dark/studio-review-4.png)
 
-![DubSync Studio three-pane episode editor and evidence monitor](docs/screenshots/studio-review-4.png)
+<sub>Actual PySide6 offscreen captures supplied by the maintainer from SteamOS, 24 November 2026. Synthetic demonstration data; not evidence of a real-media export.</sub>
 
-<sub>Historical 3.0 beta PySide6 interface, captured with synthetic demonstration data.
-The displayed match and timeline are not proof of a real-media export.</sub>
-
-### Inside the 3.0 beta Studio
-
-| Focused image-evidence review | Optional audio A/B waveform review |
+| Focused review | Optional A/B waveform review |
 | :---: | :---: |
-| ![Expanded evidence monitor with per-position review status](docs/screenshots/studio-focus-4.png) | ![Two illustrative audio waveforms in focused review mode](docs/screenshots/studio-waveform-4.png) |
-| **Persistent batch control** | **Performance presets** |
-| ![Batch control room with empty-state guidance](docs/screenshots/studio-queue-4.png) | ![Hardware-aware settings and presets](docs/screenshots/studio-hardware-presets-4.png) |
+| ![Light focused review](docs/screenshots/4.0/light/studio-focus-4.png) | ![Dark waveform review](docs/screenshots/4.0/dark/studio-waveform-4.png) |
+| **Persistent batch control** | **Performance settings** |
+| ![Dark batch control](docs/screenshots/4.0/dark/studio-queue-4.png) | ![Light performance settings](docs/screenshots/4.0/light/studio-hardware-presets-4.png) |
 
-<sub>The 3.0 gallery contains real offscreen Qt captures with synthetic episode data.
-Waveform shapes are illustrative; no source audio or NAS files were read.
-See also the [compact 980 × 680 view](docs/screenshots/studio-compact-4.png).
-The performance preview reflects the capture environment, not a hardware
-benchmark. These images do not establish export success or physical QA.</sub>
+[All 12 screenshots — light and dark](docs/screenshots/4.0/README.md) · [Historical 3.0 screenshots](docs/screenshots/studio-review-4.png)
+
+<sub>Waveforms and alignment evidence are synthetic. The compact 980 × 680 view remains dense and needs interactive layout review. Offscreen captures do not certify keyboard navigation, scaling, GPU performance or real-media export.</sub>
 
 ## What it does
 
