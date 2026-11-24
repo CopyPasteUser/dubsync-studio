@@ -1,6 +1,7 @@
 """Baseline harness contracts. Timing thresholds belong to real-device QA."""
 from dataclasses import dataclass
 import os
+import hashlib
 from pathlib import Path
 import shutil
 import tempfile
@@ -48,13 +49,19 @@ class BaselineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ):
             root = Path(directory)
             isolate(root / "initial")
-            report = alignment_suite(root, parse_args(["--repeat", "1", "--duration", "30"]))
+            from scripts.benchmark_pipeline import _synthetic_video
+            source, master = root / "source.mkv", root / "master.mkv"
+            _synthetic_video(source, 30)
+            shutil.copyfile(source, master)
+            before = [hashlib.sha256(path.read_bytes()).hexdigest() for path in (source, master)]
+            report = alignment_suite(root, parse_args([str(source), str(master), "--repeat", "1"]))
             self.assertTrue(report["evidence_identical"])
             self.assertTrue(report["runs"]["cold"][0]["safe_for_automatic_export"])
             for side in ("source", "master"):
                 self.assertEqual(report["runs"]["warm"][0]["sampling"][side]["status"], "cache_hit")
             self.assertGreater(report["summary"]["cold"]["wall_seconds"]["median"], 0)
-            self.assertEqual((root / "source.mkv").read_bytes(), (root / "master.mkv").read_bytes())
+            self.assertEqual(before, [hashlib.sha256(path.read_bytes()).hexdigest()
+                                      for path in (source, master)])
 
 
 if __name__ == "__main__":
