@@ -6,6 +6,7 @@ from PySide6.QtGui import QColor, QPainter, QPen, QBrush
 from PySide6.QtWidgets import QWidget
 
 from dubsync.core.models import AlignmentResult
+from dubsync.gui.theme import TOKENS
 
 
 class ProgressHistoryPlot(QWidget):
@@ -31,10 +32,10 @@ class ProgressHistoryPlot(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         area = self.rect().adjusted(5, 4, -5, -4)
-        painter.setPen(QPen(QColor("#263b55"), 1))
+        painter.setPen(QPen(QColor(TOKENS["border"]), 1))
         painter.drawLine(area.left(), area.bottom(), area.right(), area.bottom())
         if not self.values:
-            painter.setPen(QColor("#8298b2"))
+            painter.setPen(QColor(TOKENS["muted"]))
             painter.drawText(area, Qt.AlignmentFlag.AlignCenter, "Fortschritt")
             return
         points = []
@@ -43,7 +44,7 @@ class ProgressHistoryPlot(QWidget):
             x = area.left() + area.width() * i / span
             y = area.bottom() - area.height() * value
             points.append(QPointF(x, y))
-        painter.setPen(QPen(QColor("#54a7ff"), 2, Qt.PenStyle.SolidLine,
+        painter.setPen(QPen(QColor(TOKENS["accent"]), 2, Qt.PenStyle.SolidLine,
                             Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         for left, right in zip(points, points[1:]):
             painter.drawLine(left, right)
@@ -86,12 +87,12 @@ class AlignmentResidualPlot(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         outer = QRectF(self.rect()).adjusted(1, 1, -1, -1)
-        painter.setPen(QPen(QColor("#293b54"), 1))
-        painter.setBrush(QBrush(QColor("#0c1727")))
+        painter.setPen(QPen(QColor(TOKENS["border"]), 1))
+        painter.setBrush(QBrush(QColor(TOKENS["canvas"])))
         painter.drawRoundedRect(outer, 9, 9)
         result = self.result
         if result is None or not result.anchors:
-            painter.setPen(QColor("#93a4bb"))
+            painter.setPen(QColor(TOKENS["muted"]))
             painter.drawText(outer.adjusted(12, 0, -10, 0),
                              int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
                              "Synchronisationsanker erscheinen nach der Analyse")
@@ -120,32 +121,32 @@ class AlignmentResidualPlot(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(QColor(52, 211, 153, 24)))
         painter.drawRoundedRect(QRectF(plot.left(), band_top, plot.width(), max(1.0, band_bottom-band_top)), 3, 3)
-        painter.setPen(QPen(QColor("#29415d"), 1, Qt.PenStyle.DotLine))
+        painter.setPen(QPen(QColor(TOKENS["border"]), 1, Qt.PenStyle.DotLine))
         for fraction in (0.25, 0.5, 0.75):
             x = plot.left() + plot.width() * fraction
             painter.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()))
-        painter.setPen(QPen(QColor("#6f89a8"), 1))
+        painter.setPen(QPen(QColor(TOKENS["muted"]), 1))
         painter.drawLine(QPointF(plot.left(), y_for(0.0)), QPointF(plot.right(), y_for(0.0)))
-        painter.setPen(QPen(QColor("#6f89a8"), 1, Qt.PenStyle.DotLine))
+        painter.setPen(QPen(QColor(TOKENS["muted"]), 1, Qt.PenStyle.DotLine))
         painter.drawLine(QPointF(plot.left(), band_top), QPointF(plot.right(), band_top))
         painter.drawLine(QPointF(plot.left(), band_bottom), QPointF(plot.right(), band_bottom))
 
         for anchor, residual in zip(anchors, residuals):
             if abs(residual) <= threshold:
-                color = QColor("#34d399")
+                color = QColor(TOKENS["success"])
             elif abs(residual) <= max_abs * 0.8:
-                color = QColor("#fbbf24")
+                color = QColor(TOKENS["warning"])
             else:
-                color = QColor("#fb7185")
+                color = QColor(TOKENS["danger"])
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(color))
             painter.drawEllipse(QPointF(x_for(anchor.source_time), y_for(residual)), 2.4, 2.4)
 
-        painter.setPen(QColor("#d8e5f6"))
+        painter.setPen(QColor(TOKENS["text"]))
         painter.drawText(QRectF(outer.left()+10, outer.top()+3, outer.width()*0.6, 16),
                          int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
                          "ABSCHNITTS-ANKER" if piecewise else "ANKER-ABWEICHUNG")
-        painter.setPen(QColor("#91a7c4"))
+        painter.setPen(QColor(TOKENS["muted"]))
         painter.drawText(QRectF(outer.right()-170, outer.top()+3, 158, 16),
                          int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
                          f"{result.confidence:.0%} · RMS {self._rms(residuals):.2f}s")
