@@ -109,10 +109,14 @@ def alignment_suite(directory: Path, args) -> dict:
     from scripts.benchmark_match_pipeline import _synthetic_shift
     from dubsync.core.performance import system_specs
 
+    from dubsync.core.native_match import _library
+
     if args.source is not None:
         source, master = args.source.resolve(strict=True), args.master.resolve(strict=True)
         if not source.is_file() or not master.is_file():
             raise ValueError("Both inputs must be regular files")
+        if source.samefile(master):
+            raise ValueError("Use two distinct input files for cold/warm measurement")
         scenario = "supplied"
     else:
         source, master = directory / "source.mkv", directory / "master.mkv"
@@ -142,6 +146,7 @@ def alignment_suite(directory: Path, args) -> dict:
             "recipe": {"interval_s": args.interval, "max_samples": args.max_samples,
                        "decoder": args.decoder, "requested_workers": args.workers,
                        "synthetic_duration_s": args.duration if not args.source else None},
+            "native_matcher_available": _library() is not None,
             "evidence_identical": True, "runs": runs,
             "summary": {mode: {key: summarize([row[key] for row in rows])
                               for key in ("wall_seconds", "cpu_seconds_including_waited_children")}
