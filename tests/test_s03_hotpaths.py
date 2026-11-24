@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import tempfile
+from pathlib import Path
 import unittest
 
 from dubsync.core.audio_filters import delay_filter
@@ -52,6 +54,28 @@ class AudioFilterTests(unittest.TestCase):
                         after = pcm(prefix + delay_filter(0) + suffix)
                         self.assertTrue(before)
                         self.assertEqual(before, after)
+
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg required")
+    def test_real_aac_decode_parity_including_surround(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "track.mkv"
+            for rate in (44100, 48000):
+                for layout in ("mono", "stereo", "5.1", "7.1"):
+                    for tempo in (.98, 1., 1.02):
+                        with self.subTest(rate=rate, layout=layout, tempo=tempo):
+                            prefix = (f"aformat=channel_layouts={layout},aresample=48000,"
+                                      f"atrim=start=0.15,asetpts=PTS-STARTPTS,atempo={tempo},")
+                            evidence = []
+                            for delay in ("adelay=0:all=1,", delay_filter(0)):
+                                subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-y",
+                                    "-f", "lavfi", "-i", f"sine=frequency=440:sample_rate={rate}:duration=4",
+                                    "-af", prefix + delay + "apad,atrim=duration=4",
+                                    "-c:a", "aac", "-b:a", "128k", str(output)], check=True, timeout=20)
+                                evidence.append(subprocess.check_output(["ffmpeg", "-v", "error", "-nostdin",
+                                    "-i", str(output), "-map", "0:a:0", "-c:a", "pcm_s16le",
+                                    "-f", "hash", "-hash", "SHA256", "-"], timeout=20))
+                            self.assertEqual(evidence[0], evidence[1])
 
 
 if __name__ == "__main__":
