@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import shutil
 import subprocess
+import threading
 import unittest
 
 from dubsync.core.frame_transport import BATCH_FRAMES, FRAME_SIZE, frame_batches
@@ -60,14 +61,18 @@ class FrameTransportTests(unittest.TestCase):
         expected = subprocess.check_output(command, timeout=20)
         self.assertEqual(len(expected), 97 * FRAME_SIZE)
         # Use the same buffering as the production sampler. The fixture is
-        # bounded; communicate handles process lifetime and timeout.
+        # bounded; a watchdog also covers a stalled blocking pipe read.
         with subprocess.Popen(command, stdout=subprocess.PIPE,
                               stderr=subprocess.DEVNULL,
-                              bufsize=FRAME_SIZE * 4) as process:
+                              bufsize=FRAME_SIZE * BATCH_FRAMES) as process:
+            watchdog = threading.Timer(20, process.kill)
+            watchdog.start()
             try:
                 batches = list(frame_batches(process.stdout))
                 self.assertEqual(process.wait(timeout=5), 0)
             finally:
+                watchdog.cancel()
+                watchdog.join()
                 if process.poll() is None:
                     process.kill()
                     process.wait()
