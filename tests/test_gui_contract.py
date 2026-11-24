@@ -131,7 +131,7 @@ class GuiContractTests(unittest.TestCase):
         self.assertIn("class ProgressHistoryPlot(QWidget)", self.text)
         self.assertIn("def toggle_pause_current_job(self)", self.text)
         self.assertIn("self.pause_button.clicked.connect(self.toggle_pause_current_job)", self.text)
-        self.assertIn("self.pause_event = threading.Event()", self.text)
+        self.assertIn("self.pause_event = threading.Event()", (ROOT / "dubsync/gui/task_worker.py").read_text(encoding="utf-8"))
         self.assertIn("def test_batch_rejects_duplicate_output_destinations_before_any_probe", (ROOT / "tests" / "test_core.py").read_text(encoding="utf-8"))
 
     def test_workflow_design_and_drag_drop_are_wired(self):
