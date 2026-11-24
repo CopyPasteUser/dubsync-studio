@@ -169,3 +169,39 @@ The direct GitHub/PyPI DNS check still fails, no Qt/Cargo packages are
 available in local caches, and no GitHub Actions were intentionally started.
 The merge/release status remains NO GO until the integrated checkout and
 physical gates are satisfied.
+
+
+## Follow-up: piecewise export and real local subtitle acceptance
+
+A 10-second manual section export reproduced a 0.958 s packet gap in the
+positive-delay single-section path (426 packets). Applying the same sample
+clock correction to both single- and multi-section filters produced 471
+packets and a maximum gap of 0.001 s in both synthetic cases. The actual
+exporter integration test also checks decoded PCM in deliberately unmatched
+and matched regions. All seven exporter integration tests passed, including
+the two new section subcases.
+
+The complete subtitle acquisition module, cache, fingerprint module, original
+export validation tests, subtitle cache tests and existing subtitle acceptance
+script/test were reconstructed with exact Git blob IDs. No stand-in module
+was used. The original export validation suite passed (8 tests / 11 subtests),
+the subtitle cache suite passed (9 tests), and the subtitle acceptance test
+passed (1 test). A separate invocation of acceptance_subtitles.py --json
+confirmed bitstream-identical master video, unchanged source files, subtitle
+counts source=1/off=1/on=2, and the additional track not set as default.
+Provider and ASR cache tests use mocks; no actual online provider or
+speech-recognition quality claim is made.
+
+The offline runner now removes inherited DUBSYNC_* overrides, explicitly
+enables the native matcher, disables optional automatic subtitle sync in the
+default isolated environment, and records the dedicated subtitle acceptance
+JSON. All seven acceptance harness contract tests passed, including a new
+environment-isolation regression. These are targeted successful runs, not a
+full repository test suite.
+
+The new results extend the earlier focused count from 62 to 82 tests and from
+97 to 110 subtests (one new section test/two subcases, 18 original subtitle and
+export validation tests/11 subcases, one isolation test). The actual full
+alignment, Qt, Rust, physical desktop/GPU/NAS and full-checkout integration
+gates remain open. GitHub archive retrieval and direct dependency resolution
+are still unavailable in this workspace. Release remains NO GO.
