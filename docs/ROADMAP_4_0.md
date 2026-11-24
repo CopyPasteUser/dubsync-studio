@@ -72,3 +72,10 @@ in preferences or export-specific controls. Preserve optional subtitles,
 manual segments, A/B listening, project state, keyboard commands and explicit
 preflight. Use semantic light/dark palette tokens instead of global blur or
 decorative animation. Keep current 3.0 beta gates until physical validation.
+
+## Unified integration
+
+All five initial sprint PRs are consolidated in `integration/4.0-studio`.
+Use [integration acceptance and remaining gates](INTEGRATION_4_0.md) for the
+current evidence, offline command and no-go decisions; historical sprint
+reports describe earlier partial measurements, not final release approval.
