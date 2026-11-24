@@ -1,9 +1,6 @@
 # Development status — 24 November 2026
 
-**Released version: 3.0.0b1 (development beta).** The 4.0 implementation is
-under review in [PR #37](https://github.com/CopyPasteUser/dubsync-studio/pull/37).
-The default branch remains the 3.0 beta application; this status page does
-not announce a 4.0 release.
+**Released version: 3.0.0b1 (development beta).** The 4.0 development candidate was merged into `main` through [PR #37](https://github.com/CopyPasteUser/dubsync-studio/pull/37) at the maintainer's request. The application version metadata remains 3.0.0b1; this is not a 4.0 release.
 
 [Integration branch](https://github.com/CopyPasteUser/dubsync-studio/tree/integration/4.0-studio) ·
 [4.0 roadmap](https://github.com/CopyPasteUser/dubsync-studio/blob/integration/4.0-studio/docs/ROADMAP_4_0.md) ·
@@ -42,8 +39,7 @@ a claim of universal media compatibility.
 
 These are component microbenchmarks, not whole-application speedups.
 Full alignment, Rust/Qt regression, visual screenshot review and real
-GPU/NAS/desktop/audio acceptance remain open. The integration PR is a draft;
-no version bump, release or application-code merge has been made.
+GPU/NAS/desktop/audio acceptance remain open. The integration PR is merged (application merge commit `d2005e09590d516ac7a113726aab8961eb933f41`); no version bump or stable release has been made.
 
 ## Visual direction for 4.0
 
@@ -59,7 +55,7 @@ restricted development environment because PySide6/Qt6 was unavailable.
 
 ## Capture actual 4.0 screenshots and finish acceptance
 
-On a prepared Linux checkout of the integration branch with the project's
+On a prepared Linux checkout of `main` with the project's
 existing dependencies installed, run from the repository root:
 
 ```bash
@@ -72,7 +68,7 @@ presets, compact). Publish those PNGs under the new versioned directories and
 update the README gallery only after reviewing them. Do not overwrite the
 historical 3.0 captures or label a schematic as a real screenshot.
 
-For full local acceptance, use the clean integration checkout:
+For full local acceptance, use the clean `main` checkout:
 
 ```bash
 ./.venv/bin/python scripts/acceptance_4_0.py

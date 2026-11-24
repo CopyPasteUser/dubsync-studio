@@ -29,7 +29,6 @@ appearance persistence; not executed here.
 - Startup/PSS comparison and physical display verification.
 - Further information-density and inspector simplification after visual QA.
 
-No full checkout or PySide6 available locally. No visual acceptance, merge
-or release claim. Review S04 and S05 together on the unified integration branch.
+No full checkout or PySide6 available locally. No visual acceptance or release claim. S04 and S05 are now integrated into main through PR #37; review them together there.
 
 See [current appearance schematics and capture instructions](DEVELOPMENT_STATUS.md).

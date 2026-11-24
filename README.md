@@ -11,10 +11,9 @@ individually or as a season.
 **Current release:** `3.0.0b1` (beta) · **Linux desktop** · Python / PySide6 / FFmpeg /
 OpenCV / optional Rust · **MIT**
 
-> **4.0 development update · 24 November 2026** — The next version is being
-> integrated in [PR #37](https://github.com/CopyPasteUser/dubsync-studio/pull/37).
+> **4.0 development update · 24 November 2026** — The 4.0 development candidate is now on `main`, merged through [PR #37](https://github.com/CopyPasteUser/dubsync-studio/pull/37).
 > See the [current implementation and acceptance status](docs/DEVELOPMENT_STATUS.md).
-> The released application remains 3.0.0b1; 4.0 is not released.
+> Version metadata remains 3.0.0b1; 4.0 is not released or fully accepted.
 
 ![4.0 light appearance layout schematic](docs/design/studio-4-light.svg)
 

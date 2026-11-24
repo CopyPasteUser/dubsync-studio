@@ -1,6 +1,6 @@
 # DubSync Studio 4.0 — performance and macOS-inspired native UX
 
-Status: implementation integrated in draft PR #37; release acceptance remains open. See [current status](DEVELOPMENT_STATUS.md). Keep the Qt stack,
+Status: implementation merged into `main` via PR #37; release acceptance remains open. See [current status](DEVELOPMENT_STATUS.md). Keep the Qt stack,
 Python orchestration, FFmpeg and optional Rust hot paths. Preserve all existing
 features and independent evidence/export checks. No automatic reuse of alignment
 decisions, weakened episode identity, source mutation or unattended overwrite.
@@ -75,7 +75,7 @@ decorative animation. Keep current 3.0 beta gates until physical validation.
 
 ## Unified integration
 
-All five initial sprint PRs are consolidated in `integration/4.0-studio`.
+All five initial sprint PRs were consolidated and merged into `main` through PR #37.
 Use [integration acceptance and remaining gates](INTEGRATION_4_0.md) for the
 current evidence, offline command and no-go decisions; historical sprint
 reports describe earlier partial measurements, not final release approval.

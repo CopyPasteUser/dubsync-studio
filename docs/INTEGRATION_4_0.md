@@ -4,7 +4,7 @@
 been integrated into one reviewable branch with their histories preserved.
 The first integration commit is `51b2a6c033e20e3d3aa652d2acb0b76558e2268d`.
 The original 36 changed files were matched against the sprint blob hashes.
-Do not merge the individual sprint PRs independently of this integration.
+The consolidated PR #37 was merged into `main` on 2026-11-24 at the maintainer's explicit request, before full acceptance (merge commit `d2005e09590d516ac7a113726aab8961eb933f41`). PRs #32–#35 are merged; stacked PR #36 was closed as superseded after verifying its head is an ancestor of `main`. No code was omitted. This development merge does not authorize a release.
 The 3.0 beta version metadata stays unchanged until actual release acceptance.
 
 ## Implemented on the integration branch
@@ -83,7 +83,7 @@ Use the exact same interpreter, host and resource configuration for both
 revisions. All timings are measurements, not a machine-independent pass
 threshold. Raw logs may contain local filesystem paths; review before sharing.
 
-## Required gates before release or merge
+## Required gates before release
 
 - [x] All five original sprint changes collected into one branch.
 - [x] Focused source-identical helper/sampler/cache tests and synthetic
@@ -99,7 +99,7 @@ threshold. Raw logs may contain local filesystem paths; review before sharing.
   independent cuts, wrong episodes, multi-track audio, optional subtitles,
   cancellation/resume and output verification.
 - [ ] Address any failed gate on this branch, rerun the complete acceptance
-  on the new exact SHA, review evidence; only then merge and prepare release.
+  on the new exact SHA, review evidence; only then prepare a stable release.
 
 Optional optimization hypotheses remain open rather than being misreported
 as complete: native pHash/SIMD, GPU-native scaling, lossless alternate-audio
@@ -167,7 +167,7 @@ hardware acceptance is claimed.
 
 The direct GitHub/PyPI DNS check still fails, no Qt/Cargo packages are
 available in local caches, and no GitHub Actions were intentionally started.
-The merge/release status remains NO GO until the integrated checkout and
+At this historical evidence snapshot, the release status remains NO GO until the integrated checkout and
 physical gates are satisfied.
 
 
